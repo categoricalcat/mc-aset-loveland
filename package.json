@@ -1,21 +1,21 @@
 {
   "dependencies": {
-    "adm-zip": "^0.5.16"
+    "adm-zip": "^0.6.1"
   },
   "description": "Scripts for processing Minecraft modpacks",
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/adm-zip": "^0.5.7",
-    "@types/node": "^25.3.3",
-    "eslint": "^10.0.2",
+    "@types/adm-zip": "^0.6.0",
+    "@types/node": "^26.6.6",
+    "eslint": "^10.14.0",
     "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-prettier": "^5.5.5",
-    "globals": "^17.4.0",
-    "jiti": "^2.6.1",
-    "prettier": "^3.8.1",
-    "tsx": "^4.21.0",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.56.1"
+    "eslint-plugin-prettier": "^5.5.7",
+    "globals": "^17.14.0",
+    "jiti": "^2.7.0",
+    "prettier": "^3.9.10",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.2"
   },
   "name": "mc-fufuland-scripts",
   "scripts": {

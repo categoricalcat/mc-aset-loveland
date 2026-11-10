@@ -1,28 +1,11 @@
 import fs from 'fs/promises';
-import path, { join } from 'path';
+import path from 'path';
 import type { ModrinthIndex, File } from '../../../types/modrinth.js';
 import { extractZip, zipFolder } from '../../utils/zip/index.js';
 import { mapSequentially } from '../../utils/async/index.js';
 import { processFileWithDelayAndLogging } from '../file/index.js';
 import { updateIndex } from './update-index.js';
 import { config } from '../../config.js';
-import { createWriteStream } from 'fs';
-import { pipeline } from 'stream/promises';
-
-const downloadFile = (url: string) =>
-  fetch(url).then(async res => {
-    if (!res.body) {
-      throw new Error('No body');
-    }
-
-    const fileName = url.split('/').pop()!;
-    const filePath = join(process.cwd(), config.modsDir, fileName);
-
-    console.log(`Downloading ${url} to ${filePath}`);
-
-    const modFileStream = createWriteStream(filePath);
-    void pipeline(res.body, modFileStream);
-  });
 
 /**
  * Main processing pipeline for Modrinth modpacks
