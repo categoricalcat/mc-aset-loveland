@@ -1,8 +1,9 @@
 import type { File } from '../../../types/modrinth.js';
-import { processFile } from './process-file.js';
-import { shouldProcessFile } from '../../utils/file/index.js';
-import { delay } from '../../utils/async/index.js';
+
 import { parseProjectId } from '../../api/modrinth/index.js';
+import { delay } from '../../utils/async/index.js';
+import { shouldProcessFile } from '../../utils/file/index.js';
+import { processFile } from './process-file.js';
 
 /**
  * Processes a file with rate limiting delay and detailed logging
@@ -30,12 +31,13 @@ export const processFileWithDelayAndLogging = async (
     console.log(
       `  Updated env for ${file.path}: client=${processedFile.env.client}, server=${processedFile.env.server}`,
     );
-  } else if (file.downloads?.[0]) {
-    const projectId = parseProjectId(file.downloads[0]);
+  } else if (file.downloads[0]) {
+    const firstDownload = file.downloads[0];
+    const projectId = parseProjectId(firstDownload);
     console.log(
       projectId
         ? `  Failed to fetch project info for ${file.path}`
-        : `  Could not extract project ID from ${file.downloads[0]}`,
+        : `  Could not extract project ID from ${firstDownload}`,
       file.downloads,
       processedFile.env,
       file.env,

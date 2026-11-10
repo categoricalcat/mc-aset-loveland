@@ -1,9 +1,11 @@
+import { join } from 'path';
+
 import type { File } from '../../../types/modrinth.js';
-import { parseProjectId, fetchProject } from '../../api/modrinth/index.js';
+
+import { fetchProject, parseProjectId } from '../../api/modrinth/index.js';
+import { config } from '../../config.js';
 import { withFileCache } from '../../utils/cache/index.js';
 import { createUpdatedFile } from './create-updated-file.js';
-import { join } from 'path';
-import { config } from '../../config.js';
 
 // Create cached version of fetchProject
 const cacheDir = join(process.cwd(), config.cacheDir);
@@ -19,11 +21,12 @@ const cachedFetchProject = withFileCache(
  * @returns Promise resolving to the processed file with updated environment info, or the original file if processing fails
  */
 export const processFile = async (file: File): Promise<File> => {
-  const projectId = file.downloads?.[0]
-    ? parseProjectId(file.downloads[0])
-    : null;
+  const firstDownload = file.downloads[0];
+  const projectId = firstDownload ? parseProjectId(firstDownload) : null;
 
-  console.log(`Processing ${file.path} with project id ${projectId}`);
+  console.log(
+    `Processing ${file.path} with project id ${projectId ?? 'unknown'}`,
+  );
 
   if (!projectId) return file;
 

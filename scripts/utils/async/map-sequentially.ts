@@ -11,8 +11,8 @@ export const mapSequentially = async <T, R>(
   fn: (item: T, index: number) => Promise<R>,
 ): Promise<R[]> => {
   const results: R[] = [];
-  for (let i = 0; i < items.length; i++) {
-    results.push(await fn(items[i], i));
+  for (const [index, item] of items.entries()) {
+    results.push(await fn(item, index));
   }
   return results;
 };

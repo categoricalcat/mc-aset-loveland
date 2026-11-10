@@ -12,8 +12,11 @@ export const zipFolder = (folder: string, outZip: string): Promise<void> =>
     try {
       const zip = new AdmZip();
       zip.addLocalFolder(folder);
-      zip.writeZip(outZip, err => (err ? reject(err) : resolve()));
+      zip.writeZip(outZip, err => {
+        if (err) reject(err);
+        else resolve();
+      });
     } catch (err) {
-      reject(err);
+      reject(err instanceof Error ? err : new Error(String(err)));
     }
   });

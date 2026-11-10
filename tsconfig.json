@@ -1,27 +1,18 @@
 {
+  "extends": "@tsconfig/strictest/tsconfig.json",
   "compilerOptions": {
     "target": "esnext",
     "module": "NodeNext",
-    "lib": [
-      "esnext"
-    ],
+    "lib": ["esnext"],
     "moduleResolution": "NodeNext",
-    "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "strict": true,
-    "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "verbatimModuleSyntax": true,
-    "typeRoots": [
-      "types"
-    ]
+    "noUncheckedSideEffectImports": true,
+    "noEmit": true,
+    "typeRoots": ["types"]
   },
-  "include": [
-    "scripts/**/*",
-    "tsconfig.json"
-  ],
-  "exclude": [
-    "node_modules"
-  ]
+  "include": ["scripts/**/*", "types/**/*", "eslint.config.ts"],
+  "exclude": ["node_modules"]
 }

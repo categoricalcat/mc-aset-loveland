@@ -10,13 +10,13 @@ services:
     networks:
       - mc-egress # outbound to playit relays
       - mc-network # reach bias at 172.20.0.6
-    restart: "no"
+    restart: 'no'
 
   server:
     profiles:
       - server
     cpu_shares: 4096
-    restart: "no"
+    restart: 'no'
     stdin_open: true
     tty: true
     build:
@@ -28,8 +28,8 @@ services:
         MODPACK_ARCHIVE: ${MODPACK_ARCHIVE:-the-modpack-1.1.0.mrpack}
     container_name: asetland-server
     ports:
-      - "25565:25565/tcp"
-      - "25565:25565/udp"
+      - '25565:25565/tcp'
+      - '25565:25565/udp'
     volumes:
       - mc-data:/opt/minecraft/mc
       - ./server.properties:/opt/minecraft/mc/server.properties
@@ -37,7 +37,7 @@ services:
       - .env
     healthcheck:
       test:
-        ["CMD", "mc-monitor", "status", "-host", "0.0.0.0", "-port", "25565"]
+        ['CMD', 'mc-monitor', 'status', '-host', '0.0.0.0', '-port', '25565']
       interval: 5s
       timeout: 5s
       retries: 10
@@ -57,7 +57,7 @@ services:
       - mc-bias:/data:ro # same named volume, read-only
       - ./.backups:/backup # host folder that rclone will read from
       - ./scripts/backup.sh:/script/backup.sh:ro
-    restart: "no"
+    restart: 'no'
 
   restore:
     build:
@@ -73,7 +73,7 @@ services:
       - mc-bias:/data # restore target
       - ./.backups:/backup:ro # host backups folder, read-only
       - ./scripts/backup.sh:/script/backup.sh:ro
-    restart: "no"
+    restart: 'no'
 
   serverpack:
     profiles:
@@ -85,8 +85,8 @@ services:
       dockerfile: serverpack.Dockerfile
     container_name: asetland-serverpack
     ports:
-      - "25566:25566/tcp"
-      - "25566:25566/udp"
+      - '25566:25566/tcp'
+      - '25566:25566/udp'
     volumes:
       - mc-serverpack:/data
       - ./eula.txt:/data/eula.txt
@@ -95,7 +95,7 @@ services:
       - ./user_jvm_args.txt:/data/user_jvm_args.txt
       - ./scripts/start-server.sh:/data/start-server.sh
       - ./server-1.16.5.jar:/data/server-1.16.5.jar
-    restart: "no"
+    restart: 'no'
 
   bias:
     image: itzg/minecraft-server:latest
@@ -104,18 +104,18 @@ services:
     stdin_open: true
     mem_limit: 14g
     environment:
-      EULA: "TRUE"
+      EULA: 'TRUE'
       # Loader+mods pre-installed in the mc-bias volume; pinned NEOFORGE_VERSION
       # keeps init offline (no modrinth contact on boot).
-      TYPE: "NEOFORGE"
-      VERSION: "1.21.11"
-      NEOFORGE_VERSION: "21.11.38-beta"
-      INIT_MEMORY: "3G"
-      MAX_MEMORY: "12G"
-      SKIP_SERVER_PROPERTIES: "TRUE"
-      SERVER_PORT: "25564"
+      TYPE: 'NEOFORGE'
+      VERSION: '1.21.11'
+      NEOFORGE_VERSION: '21.11.38-beta'
+      INIT_MEMORY: '3G'
+      MAX_MEMORY: '12G'
+      SKIP_SERVER_PROPERTIES: 'TRUE'
+      SERVER_PORT: '25564'
     volumes:
-      - "mc-bias:/data"
+      - 'mc-bias:/data'
       - ./server.properties:/data/server.properties:ro
       - ./server-icon.png:/data/server-icon.png:ro
       - ./bias-processed.mrpack:/data/modpacks/bias-processed.mrpack:ro

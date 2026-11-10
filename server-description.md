@@ -1,4 +1,5 @@
 ### Servidor de Sobrevivência no Minecraft Dirigido pela Comunidade
+
 1. **Moderação e Regras**
    - Políticas de moderação?
 
@@ -47,4 +48,3 @@
        - Sistema de sono
          - Camas/móveis
          - Ferramentas para criar itens de abrigo
-

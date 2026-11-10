@@ -4,7 +4,7 @@
  * @returns Promise that rejects with the original error after logging
  */
 export const runWithErrorHandling = (fn: () => Promise<void>): Promise<void> =>
-  fn().catch(error => {
+  fn().catch((error: unknown) => {
     console.error('Error processing modpack:', error);
-    return Promise.reject(error);
+    throw error instanceof Error ? error : new Error(String(error));
   });

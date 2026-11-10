@@ -1,5 +1,5 @@
-import type { File } from '../../../types/modrinth.js';
 import type { ModrinthProject } from '../../../types/modrinth-project.js';
+import type { File } from '../../../types/modrinth.js';
 
 /**
  * Creates an updated file entry with environment information from the project

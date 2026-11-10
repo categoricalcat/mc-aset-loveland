@@ -5,5 +5,5 @@
  * @example
  * parseProjectId("https://cdn.modrinth.com/data/ABC123/versions/xyz/mod.jar") // returns "ABC123"
  */
-export const parseProjectId = (url: string): string | null =>
-  url?.split?.('/')?.[4] ?? null;
+export const parseProjectId = (url: string): null | string =>
+  url.split('/')[4] ?? null;

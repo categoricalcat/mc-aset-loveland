@@ -6,6 +6,6 @@ import { runWithErrorHandling } from './utils/async/index.js';
  * Main entry point for the modpack processor
  * Processes a Modrinth modpack by updating file environment configurations
  */
-runWithErrorHandling(() =>
+void runWithErrorHandling(() =>
   processModpack(config.mrpackPath, config.backupDir, config.outputPath),
 );

@@ -55,6 +55,7 @@ docker compose --profile restore run --rm restore read
 ## Config
 
 Edit `docker-compose.yaml`:
+
 - `MEMORY_ALLOCATION`: Server RAM (default: 16G)
 - `FABRIC_VERSION`: Minecraft version (1.21.5)
 

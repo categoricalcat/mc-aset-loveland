@@ -1,11 +1,13 @@
 import fs from 'fs/promises';
 import path from 'path';
-import type { ModrinthIndex, File } from '../../../types/modrinth.js';
-import { extractZip, zipFolder } from '../../utils/zip/index.js';
+
+import type { File, ModrinthIndex } from '../../../types/modrinth.js';
+
+import { config } from '../../config.js';
 import { mapSequentially } from '../../utils/async/index.js';
+import { extractZip, zipFolder } from '../../utils/zip/index.js';
 import { processFileWithDelayAndLogging } from '../file/index.js';
 import { updateIndex } from './update-index.js';
-import { config } from '../../config.js';
 
 /**
  * Main processing pipeline for Modrinth modpacks
@@ -27,7 +29,7 @@ export const processModpack = async (
   // Read index
   const indexPath = path.join(backupDir, config.indexPath);
   const indexContent = await fs.readFile(indexPath, 'utf-8');
-  const index: ModrinthIndex = JSON.parse(indexContent);
+  const index = JSON.parse(indexContent) as ModrinthIndex;
   console.log(` Processing ${index.files.length} files from ${index.name}`);
 
   // Process files sequentially (for rate limiting)
