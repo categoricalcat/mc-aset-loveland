@@ -51,10 +51,11 @@ services:
         OPERATION: write
     environment:
       - OPERATION=write
+      - BACKUP_VOLUME=${BACKUP_VOLUME:-mc-bias}
     profiles:
       - backup
     volumes:
-      - mc-bias:/data:ro # same named volume, read-only
+      - ${BACKUP_VOLUME:-mc-bias}:/data:ro # target volume, read-only
       - ./.backups:/backup # host folder that rclone will read from
       - ./scripts/backup.sh:/script/backup.sh:ro
     restart: 'no'
@@ -67,10 +68,11 @@ services:
         OPERATION: read
     environment:
       - OPERATION=read
+      - BACKUP_VOLUME=${BACKUP_VOLUME:-mc-bias}
     profiles:
       - restore
     volumes:
-      - mc-bias:/data # restore target
+      - ${BACKUP_VOLUME:-mc-bias}:/data # restore target
       - ./.backups:/backup:ro # host backups folder, read-only
       - ./scripts/backup.sh:/script/backup.sh:ro
     restart: 'no'

@@ -25,11 +25,15 @@ RUN chmod +x ./install-mrpack.sh && \
 ./mrpack-install ./${MODPACK_ARCHIVE} --server-dir mc --server-file server.jar
 
 # ---------------- Stage 3, the runner ----------------
-FROM eclipse-temurin:21-jdk AS runner
+FROM eclipse-temurin:21-jre AS runner
+
+ARG MEMORY_ALLOCATION="6G"
 
 WORKDIR /opt/minecraft
 
 ENV MEMORY_ALLOCATION=${MEMORY_ALLOCATION}
+ENV SERVER_DIR=/opt/minecraft/mc
+ENV PATH_TO_JAR=server.jar
 
 COPY --from=mcbin /mc-monitor /usr/local/bin/
 COPY --from=builder /opt/minecraft/mc ./mc/

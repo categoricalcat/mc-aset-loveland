@@ -1,4 +1,4 @@
-# mc-fufuland
+# mc-aset-loveland
 
 A Dockerized Minecraft server running Fabric 1.21.5 with automated modpack installation and backups.
 
@@ -14,7 +14,7 @@ A Dockerized Minecraft server running Fabric 1.21.5 with automated modpack insta
 
 ```bash
 git clone [repo-url]
-cd mc-fufuland
+cd mc-aset-loveland
 docker compose up -d
 ```
 
@@ -36,12 +36,19 @@ docker compose logs -f server
 ## Backups
 
 ```bash
-# Create backup
-docker compose --profile backup run --rm backup write
+# Live backup, no downtime (freezes world saves via RCON, backs up, unfreezes)
+./scripts/backup.sh
 
-# Restore from latest
+# Restore from latest (per-volume latest-<volume>.tar.zst)
 docker compose --profile restore run --rm restore read
 ```
+
+Archives exclude `mods/`, `libraries/`, caches and jars — those are
+re-installed from the modpack on boot. World, config and player data are kept.
+
+Other volumes: `BACKUP_VOLUME=mc-data BACKUP_SERVICE=server ./scripts/backup.sh`
+(RCON freeze only works on itzg-based services; a stopped/static volume is
+backed up directly).
 
 ## Update Modpack
 

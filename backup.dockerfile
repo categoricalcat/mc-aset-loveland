@@ -1,10 +1,7 @@
-FROM ubuntu:22.04
+FROM alpine:3
 
 # Install zstd for modern, fast compression
-RUN apt-get update && \
-    apt-get install -y zstd && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache zstd
 
 # Accept operation type as build argument
 ARG OPERATION

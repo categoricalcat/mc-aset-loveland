@@ -1,0 +1,13 @@
+.git
+.backups
+node_modules
+home/
+docs/
+*.log
+
+# bias pack is volume-mounted into the itzg service, never COPYed in a build
+bias.mrpack
+bias-processed.mrpack
+
+# ServerPack.zip and server-1.16.5.jar stay: serverpack.Dockerfile COPYs them
+# the-modpack*.mrpack stays: Dockerfile COPYs ${MODPACK_ARCHIVE}
