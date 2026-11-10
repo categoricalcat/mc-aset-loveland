@@ -77,6 +77,25 @@ services:
       - ./scripts/backup.sh:/script/backup.sh:ro
     restart: 'no'
 
+  restic:
+    build:
+      context: .
+      dockerfile: backup.dockerfile
+      args:
+        OPERATION: restic
+    profiles:
+      - restic
+    env_file:
+      - .env
+    environment:
+      - OPERATION=restic
+      - BACKUP_VOLUME=${BACKUP_VOLUME:-mc-bias}
+    volumes:
+      - ${BACKUP_VOLUME:-mc-bias}:/data:ro
+      - ./.backups/restic:/repo
+      - ./scripts/backup.sh:/script/backup.sh:ro
+    restart: 'no'
+
   serverpack:
     profiles:
       - serverpack

@@ -45,10 +45,33 @@ docker compose --profile restore run --rm restore read
 
 Archives exclude `mods/`, `libraries/`, caches and jars — those are
 re-installed from the modpack on boot. World, config and player data are kept.
+Compression is `zstd -15 -T0 --long=27` (measured sweet spot: -19 bought 2%
+for +28% time, `--ultra -22` took ~60min).
+
+Policy: backups are NEVER auto-deleted — no retention pruning, no restic
+forget. `.backups/` grows; curation is manual.
 
 Other volumes: `BACKUP_VOLUME=mc-data BACKUP_SERVICE=server ./scripts/backup.sh`
 (RCON freeze only works on itzg-based services; a stopped/static volume is
-backed up directly).
+backed up directly). The host script whitelist-parses `.env` (compose syntax
+is not shell-safe to source), so `BACKUP_VOLUME`, `BACKUP_SERVICE` and
+`RESTIC=1` can live there instead of inline prefixes.
+
+## Incremental backups (restic, shadow)
+
+Deduplicated snapshots alongside the tar.zst flow; dedup makes repeat
+snapshots nearly free. Requires `RESTIC_PASSWORD` in `.env`.
+
+```bash
+RESTIC=1 ./scripts/backup.sh          # tar.zst + restic snapshot
+docker compose --profile restic run --rm restic   # restic only
+```
+
+## World size
+
+The world is large and stays that way — no chunk pruning. Backup economics
+come from compression (tar.zst) and dedup (restic), not from shrinking the
+world.
 
 ## Update Modpack
 

@@ -1,7 +1,8 @@
 FROM alpine:3
 
-# Install zstd for modern, fast compression
-RUN apk add --no-cache zstd
+# zstd for tar archives, restic for incremental shadow backups,
+# pv + coreutils (GNU du --exclude) for progress reporting
+RUN apk add --no-cache zstd restic pv coreutils tar
 
 # Accept operation type as build argument
 ARG OPERATION
