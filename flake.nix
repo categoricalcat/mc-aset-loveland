@@ -16,15 +16,23 @@
     };
 
   inputs = {
-    # pinned to the revs locked in ../nixos/flake.lock — already in the local
-    # store, so no re-download; bump alongside that repo
-    nixpkgs.url = "github:NixOS/nixpkgs/151fa4e8ddfdd8dd25d945ad94ed54a13de9f6e4";
+    nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.zst";
 
-    flake-parts.url = "github:hercules-ci/flake-parts/ea2630b7470978622c7689a1ff75d2b389175399";
+    flake-parts.url = "github:hercules-ci/flake-parts";
 
     treefmt-nix = {
-      url = "github:numtide/treefmt-nix/0d6d739a833ba9a9c93034862e4a7b061a062a1c";
+      url = "github:numtide/treefmt-nix";
       inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    # only flakeModules.treefmt is consumed; share our pins so the lock stays small
+    nixos = {
+      url = "github:categoricalcat/nixos";
+      inputs = {
+        nixpkgs.follows = "nixpkgs";
+        flake-parts.follows = "flake-parts";
+        treefmt-nix.follows = "treefmt-nix";
+      };
     };
   };
 }

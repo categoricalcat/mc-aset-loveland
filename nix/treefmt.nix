@@ -1,34 +1,16 @@
-{ lib, ... }:
+{ inputs, lib, ... }:
 {
+  imports = [ inputs.nixos.flakeModules.treefmt ];
+
   perSystem =
     { pkgs, ... }:
     {
+      # repo formatters layered on the shared policy (ts via prettier + eslint)
       treefmt = {
-        projectRootFile = "flake.nix";
         programs = {
-          deadnix = {
-            enable = true;
-            priority = 1;
-          };
-          statix = {
-            enable = true;
-            priority = 2;
-          };
-          nixfmt = {
-            enable = true;
-            priority = 3;
-          };
-          shfmt = {
-            enable = true;
-            indent_size = 2;
-            priority = 2;
-          };
-          shellcheck = {
-            enable = true;
-            priority = 3;
-          };
-          # repo's existing formatter for TS/JSON/YAML/MD (config in package.json)
+          # ts/js/json/yaml/md; config in package.json. prettier owns markdown.
           prettier.enable = true;
+          mdformat.enable = lib.mkForce false;
         };
         settings = {
           global.excludes = [
@@ -39,29 +21,26 @@
             "*.mrpack"
             "result"
           ];
-          formatter = {
-            shellharden = {
-              command = "${pkgs.shellharden}/bin/shellharden";
-              options = [ "--replace" ];
-              includes = [ "*.sh" ];
-              priority = 1;
-            };
-            # repo-local eslint (flat config via jiti); runs after prettier,
-            # eslint-config-prettier keeps it away from formatting rules
-            eslint = {
-              command = lib.getExe (
-                pkgs.writeShellApplication {
-                  name = "eslint-fix";
-                  runtimeInputs = [ pkgs.nodejs ];
-                  text = ''exec ./node_modules/.bin/eslint --fix "$@"'';
-                }
-              );
-              includes = [
-                "*.ts"
-                "*.js"
-              ];
-              priority = 5;
-            };
+          formatter.eslint = {
+            command = lib.getExe (
+              pkgs.writeShellApplication {
+                name = "eslint-fix";
+                runtimeInputs = [ pkgs.nodejs ];
+                # node_modules is absent in the `nix flake check` sandbox; lint there is `pnpm run lint`
+                text = ''
+                  if [ ! -x ./node_modules/.bin/eslint ]; then
+                    echo "eslint-fix: node_modules missing, skipping" >&2
+                    exit 0
+                  fi
+                  exec ./node_modules/.bin/eslint --fix "$@"
+                '';
+              }
+            );
+            includes = [
+              "*.ts"
+              "*.js"
+            ];
+            priority = 5;
           };
         };
       };

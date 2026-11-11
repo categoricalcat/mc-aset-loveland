@@ -1,87 +1,101 @@
 #!/usr/bin/env sh
-# Single backup entry point, two environments:
-#   host:      ./scripts/backup.sh   freeze saves via RCON, back up, unfreeze
-#   container: compose entrypoint sets OPERATION=write|read|restic
-# Reproducible content (mods, loader, jars) is excluded everywhere — it is
-# re-installed from the modpack on boot; only world/config/player data is kept.
-set -e
-# Fail the run if tar degrades (e.g. "file changed as we read it" on a live
-# server) instead of letting the pipe report zstd's success. Not POSIX, but
-# busybox ash (backup container) and bash (host) both support it.
+# Unified backup entrypoint:
+#   host mode (default):   ./scripts/backup.sh   RCON freeze -> backup -> unfreeze
+#   worker mode (compose): OPERATION=write|read|restic (or $1) inside container
+# Reproducible content (mods, libraries, caches, jars) is excluded everywhere.
+set -eu
+# Fail pipelines if tar degrades on a live volume; supported by ash and bash.
 # shellcheck disable=SC3040
 set -o pipefail 2>/dev/null || true
 
-OPERATION="${1:-${OPERATION:-}}"
+DEFAULT_VOLUME="mc-bias"
+DEFAULT_SERVICE="bias"
+PROJECT_NAME="${COMPOSE_PROJECT_NAME:-asetland}"
+BACKUP_DIR="${BACKUP_DIR:-/backup}"
+DATA_DIR="${DATA_DIR:-/data}"
+MODE="${1:-${OPERATION:-host}}"
 
-# ---------------- host mode ----------------
-if [ "$OPERATION" = "" ]; then
-  # pick up BACKUP_VOLUME, BACKUP_SERVICE, RESTIC from .env if present.
-  # Whitelist parse: .env is compose syntax, NOT shell (values may contain
-  # spaces) — sourcing it executes garbage like "1.1.mrpack".
-  if [ -f .env ]; then
-    while IFS='=' read -r k v; do
-      # strip matching surrounding quotes (compose tolerates them, we don't)
-      case "$v" in
-      \"*\" | \'*\')
-        v=${v#?}
-        v=${v%?}
-        ;;
-      esac
-      case "$k" in
-      BACKUP_VOLUME) BACKUP_VOLUME="$v" ;;
-      BACKUP_SERVICE) BACKUP_SERVICE="$v" ;;
-      RESTIC) RESTIC="$v" ;;
-      esac
-    done <.env
-  fi
+# Whitelist-parse .env (compose .env allows unquoted spaces, unsafe to source).
+load_host_env() {
+  [ -f .env ] || return 0
+  cr="$(printf '\r')"
+  while IFS='=' read -r key val || [ "$key" != "" ]; do
+    val="${val%"$cr"}"
+    case "$val" in
+    \"*\" | \'*\')
+      val="${val#?}"
+      val="${val%?}"
+      ;;
+    esac
+    case "$key" in
+    BACKUP_VOLUME) : "${BACKUP_VOLUME:=$val}" ;;
+    BACKUP_SERVICE) : "${BACKUP_SERVICE:=$val}" ;;
+    RESTIC) : "${RESTIC:=$val}" ;;
+    esac
+  done <.env
+}
 
-  SERVICE="${BACKUP_SERVICE:-bias}"
-  VOLUME="${BACKUP_VOLUME:-mc-bias}"
+# Query running container via compose labels directly: `podman-compose ps`
+# rejects service arguments and `compose exec` requires `--profile` flags.
+find_running_container() {
+  cid="$(
+    docker ps -q \
+      --filter "label=com.docker.compose.project=$PROJECT_NAME" \
+      --filter "label=com.docker.compose.service=$SERVICE" \
+      --filter "status=running" 2>/dev/null || true
+  )"
+  printf '%s\n' "${cid%%
+*}"
+}
 
-  # portable running-check: `compose ps --status` is unsupported by podman-compose
-  CID=$(docker compose ps -q "$SERVICE" 2>/dev/null || true)
-  if [ "$CID" != "" ] && [ "$(docker inspect -f '{{.State.Running}}' "$CID" 2>/dev/null)" = "true" ]; then
-    echo "Freezing world saves on $SERVICE..."
-    docker compose exec -T "$SERVICE" rcon-cli save-all flush
-    docker compose exec -T "$SERVICE" rcon-cli save-off
-    # Always re-enable saving, even if the backup fails
-    trap 'docker compose exec -T "$SERVICE" rcon-cli save-on' EXIT
-  else
+freeze_saves_if_supported() {
+  FROZEN_CID="$(find_running_container)"
+  if [ "$FROZEN_CID" = "" ]; then
     echo "$SERVICE not running; backing up static volume $VOLUME."
+    return
   fi
+
+  if ! docker exec "$FROZEN_CID" sh -c 'command -v rcon-cli >/dev/null 2>&1' 2>/dev/null; then
+    echo "$SERVICE has no rcon-cli; backing up live volume $VOLUME without RCON freeze." >&2
+    return
+  fi
+
+  echo "Freezing world saves on $SERVICE..."
+  docker exec "$FROZEN_CID" rcon-cli save-all flush
+  docker exec "$FROZEN_CID" rcon-cli save-off
+  trap 'docker exec "$FROZEN_CID" rcon-cli save-on' EXIT
+}
+
+run_host_backup() {
+  load_host_env
+  SERVICE="${BACKUP_SERVICE:-$DEFAULT_SERVICE}"
+  VOLUME="${BACKUP_VOLUME:-$DEFAULT_VOLUME}"
+
+  freeze_saves_if_supported
 
   BACKUP_VOLUME="$VOLUME" docker compose --profile backup run --rm backup write
-
-  # shadow incremental run (becomes the primary once restore-tested)
   if [ "${RESTIC:-0}" = "1" ]; then
     BACKUP_VOLUME="$VOLUME" docker compose --profile restic run --rm restic
   fi
-  exit 0
-fi
-
-# ---------------- container worker mode ----------------
-BACKUP_DIR="${BACKUP_DIR:-/backup}"
-DATA_DIR="${DATA_DIR:-/data}"
-VOLUME_NAME="${BACKUP_VOLUME:-mc-data}"
-
-# Exclude FILE (not a split string): shellharden must not break word-splitting.
-# $1 = path prefix ("." for tar -C, "$DATA_DIR" for restic)
-write_exclude_file() {
-  f="$(mktemp)"
-  {
-    for d in mods libraries cache .cache logs crash-reports versions; do
-      echo "$1/$d"
-    done
-    echo "$1/*.jar"
-    if [ "$OPERATION" = "restic" ]; then
-      echo "$1/modpacks"
-    fi
-  } >"$f"
-  echo "$f"
 }
 
-# progress: animated bar on a TTY; newline percentages through log muxes
-# (compose up/podman-compose swallow \r updates and show only the last)
+# Generate exclude file for reproducible content reinstalled on boot.
+# $1 = path prefix ("." for tar -C, "$DATA_DIR" for restic)
+write_exclude_file() {
+  exclude_file="$(mktemp)"
+  {
+    for dir in mods libraries cache .cache logs crash-reports versions; do
+      echo "$1/$dir"
+    done
+    echo "$1/*.jar"
+    if [ "$MODE" = "restic" ]; then
+      echo "$1/modpacks"
+    fi
+  } >"$exclude_file"
+  echo "$exclude_file"
+}
+
+# Animated progress bar on TTY; periodic newline percentages through log muxes.
 pv_progress() {
   if [ -t 2 ]; then
     pv -fs "$1" -N backup
@@ -90,55 +104,65 @@ pv_progress() {
   fi
 }
 
-case "$OPERATION" in
-write)
-  ARCHIVE="${ARCHIVE:-${VOLUME_NAME}-$(date +%Y-%m-%d-%H-%M-%S).tar.zst}"
-  LATEST="latest-${VOLUME_NAME}.tar.zst"
-  EXCLUDE_FILE="$(write_exclude_file .)"
+backup_tar() {
+  volume="${BACKUP_VOLUME:-$DEFAULT_VOLUME}"
+  archive="${ARCHIVE:-${volume}-$(date +%Y-%m-%d-%H-%M-%S).tar.zst}"
+  latest="latest-${volume}.tar.zst"
+  exclude_file="$(write_exclude_file .)"
 
-  echo "Starting backup of $VOLUME_NAME to $ARCHIVE..."
-  # size estimate for pv's ETA; same exclusions as the tar.
-  # (cd so exclude patterns like ./mods match du's printed paths)
-  SIZE=$(cd "$DATA_DIR" && du -sb --exclude-from="$EXCLUDE_FILE" . | cut -f1)
-  # -15: region data is already dense; -19 bought 2% for +28% time,
-  # --ultra -22 measured ~60min. -15 is the speed/size sweet spot.
-  tar -C "$DATA_DIR" --exclude-from="$EXCLUDE_FILE" -cf - . |
-    pv_progress "$SIZE" |
-    zstd -15 -T0 --long=27 >"$BACKUP_DIR/$ARCHIVE"
-  cp "$BACKUP_DIR/$ARCHIVE" "$BACKUP_DIR/$LATEST"
-  echo "Backup completed! Archive stored at $BACKUP_DIR/$ARCHIVE"
-  ;;
-read)
-  LATEST="latest-${VOLUME_NAME}.tar.zst"
-  if [ ! -f "$BACKUP_DIR/$LATEST" ]; then
-    echo "No backup archive found at $BACKUP_DIR/$LATEST"
+  echo "Starting backup of $volume to $archive..."
+  # Run du from $DATA_DIR so ./<dir> exclude patterns match printed paths.
+  size="$(cd "$DATA_DIR" && du -sb --exclude-from="$exclude_file" . | cut -f1)"
+  # zstd -15: measured speed/size sweet spot on region data (-19 gained 2% for +28% time).
+  tar -C "$DATA_DIR" --exclude-from="$exclude_file" -cf - . |
+    pv_progress "$size" |
+    zstd -15 -T0 --long=27 >"$BACKUP_DIR/$archive"
+  cp "$BACKUP_DIR/$archive" "$BACKUP_DIR/$latest"
+  echo "Backup completed: $BACKUP_DIR/$archive"
+}
+
+restore_tar() {
+  volume="${BACKUP_VOLUME:-$DEFAULT_VOLUME}"
+  latest="latest-${volume}.tar.zst"
+  if [ ! -f "$BACKUP_DIR/$latest" ]; then
+    echo "No backup archive found at $BACKUP_DIR/$latest" >&2
     exit 1
   fi
-  echo "Restoring $VOLUME_NAME from $BACKUP_DIR/$LATEST..."
+
+  echo "Restoring $volume from $BACKUP_DIR/$latest..."
   echo "Clearing existing data in $DATA_DIR..."
   rm -rf "${DATA_DIR:?}"/*
   mkdir -p "$DATA_DIR"
-  zstd -d --long=27 -c "$BACKUP_DIR/$LATEST" | tar -xf - -C "$DATA_DIR"
-  echo "Restore completed!"
-  ;;
-restic)
-  # Incremental dedup snapshots; NOTHING is ever forgotten or pruned.
+  zstd -d --long=27 -c "$BACKUP_DIR/$latest" | tar -xf - -C "$DATA_DIR"
+  echo "Restore completed."
+}
+
+backup_restic() {
+  # Incremental dedup snapshots; nothing is ever forgotten or pruned.
   : "${RESTIC_PASSWORD:?RESTIC_PASSWORD required — set it in .env}"
   export RESTIC_REPOSITORY="${RESTIC_REPOSITORY:-/repo}"
-  EXCLUDE_FILE="$(write_exclude_file "$DATA_DIR")"
+  volume="${BACKUP_VOLUME:-$DEFAULT_VOLUME}"
+  exclude_file="$(write_exclude_file "$DATA_DIR")"
 
-  # config file present = repo exists; avoids re-init on wrong password
+  # Check config file directly so a wrong password never triggers re-init.
   if [ ! -f "$RESTIC_REPOSITORY/config" ]; then
     echo "Initializing restic repo at $RESTIC_REPOSITORY..."
     restic init
   fi
-  echo "Starting restic backup of $VOLUME_NAME..."
-  restic backup "$DATA_DIR" --tag "$VOLUME_NAME" --exclude-file="$EXCLUDE_FILE"
+
+  echo "Starting restic backup of $volume..."
+  restic backup "$DATA_DIR" --tag "$volume" --exclude-file="$exclude_file"
   echo "Restic snapshot completed."
   restic snapshots --latest 1
-  ;;
+}
+
+case "$MODE" in
+host) run_host_backup ;;
+write) backup_tar ;;
+read) restore_tar ;;
+restic) backup_restic ;;
 *)
-  echo "Usage: $0 {write|read|restic}"
+  echo "Usage: $0 [write|read|restic]" >&2
   exit 1
   ;;
 esac

@@ -1,5 +1,29 @@
 name: asetland
 
+# Pack servers share one Dockerfile; versions (MC, loader, Java) come from PACK.
+x-pack-server: &pack-server
+  stdin_open: true
+  tty: true
+  restart: 'no'
+  env_file:
+    - .env
+  environment:
+    MEMORY_ALLOCATION: ${MEMORY_ALLOCATION:-8G}
+  healthcheck:
+    test:
+      ['CMD', 'mc-monitor', 'status', '-host', '127.0.0.1', '-port', '25564']
+    interval: 5s
+    timeout: 5s
+    retries: 10
+    start_period: 5s
+
+x-backup-worker: &backup-worker
+  image: asetland-backup
+  build:
+    context: .
+    dockerfile: backup.dockerfile
+  restart: 'no'
+
 services:
   tunnel:
     image: ghcr.io/playit-cloud/playit-agent:latest
@@ -13,42 +37,26 @@ services:
     restart: 'no'
 
   server:
+    <<: *pack-server
     profiles:
       - server
     cpu_shares: 4096
-    restart: 'no'
-    stdin_open: true
-    tty: true
     build:
       context: .
-      dockerfile: Dockerfile
       args:
-        TARGETARCH: ${TARGETARCH:-linux}
-        MEMORY_ALLOCATION: ${MEMORY_ALLOCATION:-16G}
-        MODPACK_ARCHIVE: ${MODPACK_ARCHIVE:-the-modpack-1.1.0.mrpack}
+        PACK: ${MODPACK_ARCHIVE:-the-modpack.mrpack}
     container_name: asetland-server
     ports:
-      - '25565:25565/tcp'
-      - '25565:25565/udp'
+      - '25565:25564/tcp'
+      - '25565:25564/udp'
     volumes:
-      - mc-data:/opt/minecraft/mc
-      - ./server.properties:/opt/minecraft/mc/server.properties
-    env_file:
-      - .env
-    healthcheck:
-      test:
-        ['CMD', 'mc-monitor', 'status', '-host', '0.0.0.0', '-port', '25565']
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 5s
+      - mc-data:/data
+      - ./eula.txt:/data/eula.txt:ro
+      - ./server.properties:/data/server.properties:ro
+      - ./server-icon.png:/data/server-icon.png:ro
 
   backup:
-    build:
-      context: .
-      dockerfile: backup.dockerfile
-      args:
-        OPERATION: write
+    <<: *backup-worker
     environment:
       - OPERATION=write
       - BACKUP_VOLUME=${BACKUP_VOLUME:-mc-bias}
@@ -58,14 +66,9 @@ services:
       - ${BACKUP_VOLUME:-mc-bias}:/data:ro # target volume, read-only
       - ./.backups:/backup # host folder that rclone will read from
       - ./scripts/backup.sh:/script/backup.sh:ro
-    restart: 'no'
 
   restore:
-    build:
-      context: .
-      dockerfile: backup.dockerfile
-      args:
-        OPERATION: read
+    <<: *backup-worker
     environment:
       - OPERATION=read
       - BACKUP_VOLUME=${BACKUP_VOLUME:-mc-bias}
@@ -75,14 +78,9 @@ services:
       - ${BACKUP_VOLUME:-mc-bias}:/data # restore target
       - ./.backups:/backup:ro # host backups folder, read-only
       - ./scripts/backup.sh:/script/backup.sh:ro
-    restart: 'no'
 
   restic:
-    build:
-      context: .
-      dockerfile: backup.dockerfile
-      args:
-        OPERATION: restic
+    <<: *backup-worker
     profiles:
       - restic
     env_file:
@@ -94,45 +92,40 @@ services:
       - ${BACKUP_VOLUME:-mc-bias}:/data:ro
       - ./.backups/restic:/repo
       - ./scripts/backup.sh:/script/backup.sh:ro
-    restart: 'no'
 
   serverpack:
+    <<: *pack-server
     profiles:
       - serverpack
-    tty: true
-    stdin_open: true
     build:
       context: .
-      dockerfile: serverpack.Dockerfile
+      args:
+        PACK: ServerPack.zip
     container_name: asetland-serverpack
     ports:
-      - '25566:25566/tcp'
-      - '25566:25566/udp'
+      - '25566:25564/tcp'
+      - '25566:25564/udp'
     volumes:
       - mc-serverpack:/data
-      - ./eula.txt:/data/eula.txt
-      - ./server.properties:/data/server.properties
-      - ./server-icon.png:/data/server-icon.png
-      - ./user_jvm_args.txt:/data/user_jvm_args.txt
-      - ./scripts/start-server.sh:/data/start-server.sh
-      - ./server-1.16.5.jar:/data/server-1.16.5.jar
-    restart: 'no'
+      - ./eula.txt:/data/eula.txt:ro
+      - ./server.properties:/data/server.properties:ro
+      - ./server-icon.png:/data/server-icon.png:ro
 
   bias:
     image: itzg/minecraft-server:latest
     # no published ports: public access via playit tunnel only (tunnel->bias over mc-network)
     tty: true
     stdin_open: true
-    mem_limit: 14g
+    # 8G heap + ~2G JVM overhead; 12G swapped on this 19GB host
+    mem_limit: 10g
     environment:
       EULA: 'TRUE'
-      # Loader+mods pre-installed in the mc-bias volume; pinned NEOFORGE_VERSION
-      # keeps init offline (no modrinth contact on boot).
-      TYPE: 'NEOFORGE'
-      VERSION: '1.21.11'
-      NEOFORGE_VERSION: '21.11.38-beta'
-      INIT_MEMORY: '3G'
-      MAX_MEMORY: '12G'
+      # MC + loader versions come from the mrpack; re-applied when it changes.
+      TYPE: 'MODRINTH'
+      MODRINTH_MODPACK: '/data/modpacks/bias-processed.mrpack'
+      MEMORY: '8G'
+      USE_AIKAR_FLAGS: 'true'
+      JVM_XX_OPTS: '-XX:+UseTransparentHugePages'
       SKIP_SERVER_PROPERTIES: 'TRUE'
       SERVER_PORT: '25564'
     volumes:

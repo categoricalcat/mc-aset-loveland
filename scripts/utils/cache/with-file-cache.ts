@@ -20,19 +20,22 @@ export const withFileCache =
     const filePath = join(cacheDir, cacheKey(arg));
     return fs
       .readFile(filePath, 'utf8')
-      .then(raw => JSON.parse(raw) as Res)
-      .then(res => {
-        console.log(`Using cached ${filePath}`);
-        return res;
-      })
-      .catch(() => {
+      .then(raw => JSON.parse(raw) as null | Res)
+      .catch(() => null)
+      .then(cached => {
+        if (cached !== null && cached !== undefined) {
+          console.log(`Using cached ${filePath}`);
+          return cached;
+        }
         console.log(`Fetching ${filePath} from API`);
-        return fn(arg);
-      })
-      .then(res =>
-        fs
-          .mkdir(dirname(filePath), { recursive: true })
-          .then(() => fs.writeFile(filePath, JSON.stringify(res), 'utf8'))
-          .then(() => res),
-      );
+        // null/undefined mean a failed fetch; caching them would pin the failure
+        return fn(arg).then(res =>
+          res === null || res === undefined
+            ? res
+            : fs
+                .mkdir(dirname(filePath), { recursive: true })
+                .then(() => fs.writeFile(filePath, JSON.stringify(res), 'utf8'))
+                .then(() => res),
+        );
+      });
   };

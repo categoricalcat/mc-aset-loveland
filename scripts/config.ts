@@ -1,13 +1,15 @@
 import { mkdirSync } from 'fs';
+import { basename } from 'path';
 
-const MODPACK_NAME = 'bias';
+const rawInput = process.argv[2] ?? 'bias';
+const modpackStem = basename(rawInput, '.mrpack');
 
 /**
  * Configuration for the modpack processor
  */
 export const config = {
   /** Directory where the modpack will be extracted */
-  backupDir: `.backups/${MODPACK_NAME}`,
+  backupDir: `.backups/${modpackStem}`,
 
   /** Directory for caching Modrinth API responses */
   cacheDir: '.backups/modrinth_cache',
@@ -18,22 +20,17 @@ export const config = {
   /** Path to the modrinth index file within the modpack */
   indexPath: 'modrinth.index.json',
 
-  /** Directory where the mods will be downloaded */
-  modsDir: '.backups/mods',
-
   /** When true, only process files in the mods/ directory */
   modsOnly: false as boolean,
 
   /** Path to the input modpack file */
-  mrpackPath: `${MODPACK_NAME}.mrpack`,
+  mrpackPath: rawInput.endsWith('.mrpack') ? rawInput : `${rawInput}.mrpack`,
 
   /** Path to the output index file */
   outputPath: 'index-copy.json',
 
   /** Path to the processed modpack output */
-  processedPackPath: `${MODPACK_NAME}-processed.mrpack`,
+  processedPackPath: `${modpackStem}-processed.mrpack`,
 } as const;
 
-// mkdir -p for [cacheDir, modsDir]
 mkdirSync(config.cacheDir, { recursive: true });
-mkdirSync(config.modsDir, { recursive: true });

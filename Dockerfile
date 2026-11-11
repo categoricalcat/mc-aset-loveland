@@ -1,50 +1,33 @@
-# ---------------- Stage 1, mc-monitor binary ----------------
 ARG MC_MONITOR_VERSION=0.15.5
-FROM itzg/mc-monitor:${MC_MONITOR_VERSION} AS mcbin
+FROM itzg/mc-monitor:${MC_MONITOR_VERSION} AS mcmonitor
 
-# ---------------- Stage 2, install the modpack ----------------
-FROM eclipse-temurin:21-jre AS builder
+FROM debian:stable-slim AS builder
 
-WORKDIR /opt/minecraft
+ARG TARGETARCH
+ARG MRPACK_INSTALL_VERSION=0.16.10
+ARG PACK=the-modpack.mrpack
 
-ARG MEMORY_ALLOCATION="6G"
-ARG TARGETARCH=linux-arm64
-# ARG MODPACK_ARCHIVE=the-modpack-processed.mrpack
-ARG MODPACK_ARCHIVE=the-modpack.mrpack
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl jq unzip && \
+    rm -rf /var/lib/apt/lists/*
 
-ENV MODPACK_ARCHIVE=${MODPACK_ARCHIVE}
-ENV TARGETARCH=${TARGETARCH}
+COPY scripts/install-pack.sh /usr/local/bin/
+COPY ["${PACK}", "/tmp/pack"]
+RUN bash /usr/local/bin/install-pack.sh
 
-# https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.0.3/fabric-installer-1.0.3.jar
+# glibc base: musl (alpine) Temurin 8 fails TLS handshakes with Mojang/Forge.
+# :debug only adds busybox, needed by start-server.sh.
+FROM gcr.io/distroless/cc-debian13:debug
 
-COPY ${MODPACK_ARCHIVE} ./
-COPY scripts/install-mrpack.sh ./
+ENV PATH=/opt/java/bin:/busybox:/usr/local/bin:/usr/bin:/bin
 
-RUN chmod +x ./install-mrpack.sh && \
-./install-mrpack.sh ${TARGETARCH} && \
-./mrpack-install ./${MODPACK_ARCHIVE} --server-dir mc --server-file server.jar
+COPY --from=mcmonitor /mc-monitor /usr/local/bin/
+COPY --from=builder /opt/java /opt/java
+COPY --from=builder /opt/pack /opt/pack
+COPY scripts/start-server.sh /usr/local/bin/
 
-# ---------------- Stage 3, the runner ----------------
-FROM eclipse-temurin:21-jre AS runner
+WORKDIR /data
 
-ARG MEMORY_ALLOCATION="6G"
+EXPOSE 25564
 
-WORKDIR /opt/minecraft
-
-ENV MEMORY_ALLOCATION=${MEMORY_ALLOCATION}
-ENV SERVER_DIR=/opt/minecraft/mc
-ENV PATH_TO_JAR=server.jar
-
-COPY --from=mcbin /mc-monitor /usr/local/bin/
-COPY --from=builder /opt/minecraft/mc ./mc/
-
-COPY eula.txt ./mc/
-COPY server-icon.png ./mc/
-COPY server.properties ./mc/
-COPY scripts/start-server.sh ./
-
-RUN chmod +x ./start-server.sh
-
-EXPOSE 25565
-
-ENTRYPOINT ["./start-server.sh"]
+ENTRYPOINT ["/busybox/sh", "/usr/local/bin/start-server.sh"]

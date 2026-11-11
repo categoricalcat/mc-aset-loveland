@@ -1,35 +1,39 @@
 # mc-aset-loveland
 
-A Dockerized Minecraft server running Fabric 1.21.5 with automated modpack installation and backups.
+Dockerized Minecraft server stack supporting Modrinth (`.mrpack`) and CurseForge (`.zip`) packs with Playit tunnel routing and compressed/incremental backups.
 
 ## Tech Stack
 
 - Docker & Docker Compose
-- Fabric-powered Minecraft server
-- TypeScript for modpack processing
+- NeoForge, Fabric, and Forge Minecraft servers
+- TypeScript for Modrinth modpack `env` processing
 - Playit.gg tunnel for external access
-- Zstd compression for backups
+- Zstd + Restic for world backups
 
 ## Getting Started
 
 ```bash
 git clone [repo-url]
 cd mc-aset-loveland
-docker compose up -d
-```
 
-That's it. Connect to `localhost:25565`.
+# Default stack: bias (NeoForge) + Playit tunnel
+docker compose up -d
+
+# Local Fabric pack server on localhost:25565
+docker compose --profile server up -d
+
+# Legacy CurseForge serverpack on localhost:25566
+docker compose --profile serverpack up -d
+```
 
 ## How to Run
 
 ```bash
-# Start server
-docker compose up -d
-
-# Stop server
+# Stop running services
 docker compose down
 
-# View logs
+# View logs (bias or profile service)
+docker compose logs -f bias
 docker compose logs -f server
 ```
 
@@ -52,10 +56,10 @@ Policy: backups are NEVER auto-deleted — no retention pruning, no restic
 forget. `.backups/` grows; curation is manual.
 
 Other volumes: `BACKUP_VOLUME=mc-data BACKUP_SERVICE=server ./scripts/backup.sh`
-(RCON freeze only works on itzg-based services; a stopped/static volume is
-backed up directly). The host script whitelist-parses `.env` (compose syntax
-is not shell-safe to source), so `BACKUP_VOLUME`, `BACKUP_SERVICE` and
-`RESTIC=1` can live there instead of inline prefixes.
+(RCON freeze only works on itzg-based services; services without `rcon-cli` or
+stopped volumes are backed up directly). The host script whitelist-parses `.env`
+(compose syntax is not shell-safe to source), so `BACKUP_VOLUME`,
+`BACKUP_SERVICE` and `RESTIC=1` can live there instead of inline prefixes.
 
 ## Incremental backups (restic, shadow)
 
@@ -75,29 +79,37 @@ world.
 
 ## Update Modpack
 
-1. Replace `the-modpack.mrpack`
+The pack is the only manual input. Minecraft, loader and Java versions are
+read from it at build time (`scripts/install-pack.sh`): `.mrpack` via
+mrpack-install, CurseForge instance zip (`ServerPack.zip`) via the Forge
+installer. Mods/loader are linked from the image on every start, so the
+volume only holds world and state.
+
+1. Replace `the-modpack.mrpack` (or set `MODPACK_ARCHIVE` in `.env`)
 2. Rebuild:
    ```bash
-   docker compose build server
-   docker compose up -d --force-recreate server
+   docker compose --profile server build server
+   docker compose --profile server up -d --force-recreate server
    ```
+
+`bias` (itzg, `TYPE=MODRINTH`) reads its versions from `bias-processed.mrpack`;
+replace it and `docker compose up -d --force-recreate bias`.
 
 ## Config
 
-Edit `docker-compose.yaml`:
+Edit `compose.yaml` / `.env`:
 
-- `MEMORY_ALLOCATION`: Server RAM (default: 16G)
-- `FABRIC_VERSION`: Minecraft version (1.21.5)
+- `MEMORY_ALLOCATION`: Pack server RAM for `server` / `serverpack` (default: 8G)
+- `MODPACK_ARCHIVE`: Fabric server pack (default: `the-modpack.mrpack`)
 
 Server settings: `server.properties`
 
 ## Optional: Process Modpack
 
-Enriches modpack with metadata from Modrinth:
+Updates `.mrpack` client/server `env` flags from Modrinth project metadata:
 
 ```bash
 pnpm install
-pnpm run process
+pnpm run process                 # bias.mrpack -> bias-processed.mrpack
+pnpm run process the-modpack     # the-modpack.mrpack -> the-modpack-processed.mrpack
 ```
-
-Creates `the-modpack-processed.mrpack` with enhanced mod info.

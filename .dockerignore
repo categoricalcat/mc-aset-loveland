@@ -9,5 +9,4 @@ docs/
 bias.mrpack
 bias-processed.mrpack
 
-# ServerPack.zip and server-1.16.5.jar stay: serverpack.Dockerfile COPYs them
-# the-modpack*.mrpack stays: Dockerfile COPYs ${MODPACK_ARCHIVE}
+# ServerPack.zip and the-modpack*.mrpack stay: Dockerfile COPYs ${PACK}
