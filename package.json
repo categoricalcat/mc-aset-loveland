@@ -22,6 +22,7 @@
   "scripts": {
     "dev": "tsx watch scripts/index.ts",
     "process": "tsx scripts/index.ts",
+    "update": "tsx scripts/update.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",

@@ -11,8 +11,10 @@
     "verbatimModuleSyntax": true,
     "noUncheckedSideEffectImports": true,
     "noEmit": true,
-    "typeRoots": ["types"]
+    "paths": {
+      "@modrinth": ["./scripts/modrinth/index.ts"]
+    }
   },
-  "include": ["scripts/**/*", "types/**/*", "eslint.config.ts"],
+  "include": ["scripts/**/*", "eslint.config.ts"],
   "exclude": ["node_modules"]
 }

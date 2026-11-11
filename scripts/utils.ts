@@ -2,14 +2,13 @@ import AdmZip from 'adm-zip';
 import fs from 'fs/promises';
 import { dirname, join } from 'path';
 
+import { type Json, parseJson } from './json.js';
+
 export const delay = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms));
 
-export const toError = (e: unknown): Error =>
-  e instanceof Error ? e : new Error(String(e));
-
-export const readJson = async (path: string): Promise<unknown> =>
-  JSON.parse(await fs.readFile(path, 'utf8')) as unknown;
+export const readJson = async (path: string): Promise<Json> =>
+  parseJson(await fs.readFile(path, 'utf8'));
 
 // Capped so a bogus Retry-After cannot stall the run.
 export const retryAfterSeconds = (
@@ -31,16 +30,17 @@ export const withFileCache =
     cacheDir: string,
     cacheKey: (arg: Arg) => string,
     fn: (arg: Arg) => Promise<null | Res>,
-    isValid: (raw: unknown) => raw is Res,
+    parse: (raw: Json) => null | Res,
   ) =>
   (arg: Arg): Promise<null | Res> => {
     const filePath = join(cacheDir, cacheKey(arg));
     return readJson(filePath)
       .catch(() => null)
       .then(cached => {
-        if (isValid(cached)) {
+        const parsed = cached === null ? null : parse(cached);
+        if (parsed !== null) {
           console.log(`Using cached ${filePath}`);
-          return cached;
+          return parsed;
         }
         console.log(`Fetching ${filePath} from API`);
         return fn(arg).then(res =>
@@ -73,6 +73,6 @@ export const zipFolder = (folder: string, outZip: string): Promise<void> =>
         else resolve();
       });
     } catch (err) {
-      reject(toError(err));
+      reject(err instanceof Error ? err : new Error('zip failed'));
     }
   });

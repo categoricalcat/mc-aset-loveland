@@ -1,18 +1,22 @@
+import {
+  type File,
+  type ModrinthIndex,
+  parseModrinthIndex,
+  processAndLogFile,
+} from '@modrinth';
 import fs from 'fs/promises';
 import path from 'path';
 
-import type { File, ModrinthIndex } from '../types/modrinth.js';
-
 import { config } from './config.js';
-import { processAndLogFile } from './modrinth.js';
-import { extractZip, readJson, toError, zipFolder } from './utils.js';
+import { extractZip, readJson, zipFolder } from './utils.js';
 
 const run = async (): Promise<void> => {
   await extractZip(config.mrpackPath, config.backupDir);
   console.log(`Extracted ${config.mrpackPath} to ${config.backupDir}`);
 
   const indexPath = path.join(config.backupDir, config.indexPath);
-  const index = (await readJson(indexPath)) as ModrinthIndex;
+  const index = parseModrinthIndex(await readJson(indexPath));
+  if (index === null) throw new Error(`invalid index ${indexPath}`);
   console.log(` Processing ${index.files.length} files from ${index.name}`);
 
   // Must stay sequential: fetchProject throttling assumes one request in flight.
@@ -46,7 +50,12 @@ const run = async (): Promise<void> => {
   }
 };
 
-void run().catch((e: unknown) => {
-  console.error('Error processing modpack:', toError(e));
+try {
+  await run();
+} catch (caught) {
+  console.error(
+    'Error processing modpack:',
+    caught instanceof Error ? caught : new Error('modpack processing failed'),
+  );
   process.exitCode = 1;
-});
+}

@@ -1,4 +1,4 @@
-ARG MC_MONITOR_VERSION=0.15.5
+ARG MC_MONITOR_VERSION=1.20.1
 FROM itzg/mc-monitor:${MC_MONITOR_VERSION} AS mcmonitor
 
 FROM debian:stable-slim AS builder
