@@ -4,16 +4,10 @@ import { config } from '../../config.js';
 import { isUnsupported } from './is-unsupported.js';
 
 /**
- * Determines whether a file should be processed based on configuration
- * @param file - The file to check
- * @returns True if the file should be processed, false otherwise
+ * Keeps a file for the server pack.
+ * Drops server-unsupported files, and non-mods when modsOnly is set.
  */
 export const shouldProcessFile = (file: File): boolean => {
-  if (config.modsOnly && !file.path.startsWith('mods/')) {
-    return false;
-  }
-  if (config.ignoreUnsupported && isUnsupported(file.env)) {
-    return false;
-  }
-  return true;
+  if (config.modsOnly && !file.path.startsWith('mods/')) return false;
+  return !isUnsupported(file.env);
 };

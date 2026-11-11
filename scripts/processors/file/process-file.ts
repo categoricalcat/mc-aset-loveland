@@ -16,11 +16,12 @@ const cachedFetchProject = withFileCache(
 );
 
 /**
- * Processes a single file by fetching project information and updating its environment configuration
- * @param file - The file to process
- * @returns Promise resolving to the processed file with updated environment info, or the original file if processing fails
+ * Loads Modrinth client/server sides onto a file.
+ * A missing project leaves the file unchanged so the caller can keep it.
  */
-export const processFile = async (file: File): Promise<File> => {
+export const processFile = async (
+  file: File,
+): Promise<{ file: File; project: 'found' | 'missing' | 'no-id' }> => {
   const firstDownload = file.downloads[0];
   const projectId = firstDownload ? parseProjectId(firstDownload) : null;
 
@@ -28,10 +29,10 @@ export const processFile = async (file: File): Promise<File> => {
     `Processing ${file.path} with project id ${projectId ?? 'unknown'}`,
   );
 
-  if (!projectId) return file;
+  if (!projectId) return { file, project: 'no-id' };
 
   const project = await cachedFetchProject(projectId);
-  const updatedFile = project ? createUpdatedFile(file, project) : file;
+  if (!project) return { file, project: 'missing' };
 
-  return updatedFile;
+  return { file: createUpdatedFile(file, project), project: 'found' };
 };

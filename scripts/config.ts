@@ -14,9 +14,6 @@ export const config = {
   /** Directory for caching Modrinth API responses */
   cacheDir: '.backups/modrinth_cache',
 
-  /** When true, files whose env declares unsupported for client or server are ignored */
-  ignoreUnsupported: false as boolean,
-
   /** Path to the modrinth index file within the modpack */
   indexPath: 'modrinth.index.json',
 
