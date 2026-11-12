@@ -79,6 +79,63 @@ world.
 
 ## Update Modpack
 
+### bias (live)
+
+`pnpm run update <stem>` reads `<stem>.mrpack` (default `bias.mrpack`) and
+writes two packs from that resolution:
+
+- `<stem>-update-server.mrpack` — compose mounts this into itzg (`TYPE=MODRINTH`)
+- `<stem>-update-client.mrpack` — import this in Prism. Same loader and the same
+  updated jars as the server pack, plus client-only mods, resource packs,
+  shader packs, and `overrides/mods`
+
+Prism export, check:
+
+- `mods` — index entries. Install each mod from Modrinth in Prism. Jars Prism
+  cannot link land in `overrides/mods`. The client pack keeps that directory,
+  except a jar whose mod is already in the index (the index file is the
+  updated one). The server pack does not include it.
+- `config` — kept as `overrides/config`.
+- `resourcepacks` and `shaderpacks` — kept on the client pack.
+
+Leave `saves` unchecked. The world is volume `mc-bias`
+(`level-name=asetland`); an exported save overwrites it. Leave `logs` and
+`crash-reports` unchecked. NeoForge 26 loads coremods from mod jars. World
+datapacks belong in that volume at `asetland/datapacks/`. To ship one inside
+the pack, place it at `overrides/asetland/datapacks/`.
+
+```bash
+pnpm install
+pnpm run update          # bias.mrpack -> bias-update-server.mrpack + bias-update-client.mrpack
+pnpm run update other    # other.mrpack -> other-update-server.mrpack + other-update-client.mrpack
+docker compose up -d --force-recreate bias
+```
+
+`PACK_STEM` selects which server pack `bias` mounts (default `bias`).
+`WORLD_VOLUME` selects its Docker volume (default `mc-bias`). A second pack
+uses its own volume; the same volume shares `mods/` and config with the
+previous pack.
+
+```bash
+PACK_STEM=other WORLD_VOLUME=mc-other docker compose up -d --force-recreate bias
+```
+
+`pnpm run update` targets Minecraft 26.3. Both packs get:
+
+- NeoForge when the index lists `neoforge`, otherwise Fabric, pinned to the
+  latest 26.3 loader build
+- Each mod replaced by its newest 26.3 release for that loader (any build
+  when no release exists); required Modrinth dependencies are added
+- client/server `env` rewritten from Modrinth
+
+Mods with no 26.3 build are dropped from both (`Removed` in the log). A
+resource pack or shader pack with no build for that loader stays at the
+exported file. The server pack then omits `server=unsupported` files.
+`overrides/mods` is only in the client pack. A run also deletes a leftover
+`bias-updated.mrpack`.
+
+### server / serverpack (image)
+
 The pack is the only manual input. Minecraft, loader and Java versions are
 read from it at build time (`scripts/install-pack.sh`): `.mrpack` via
 mrpack-install, CurseForge instance zip (`ServerPack.zip`) via the Forge
@@ -92,21 +149,22 @@ volume only holds world and state.
    docker compose --profile server up -d --force-recreate server
    ```
 
-`bias` (itzg, `TYPE=MODRINTH`) reads its versions from `bias-processed.mrpack`;
-replace it and `docker compose up -d --force-recreate bias`.
-
 ## Config
 
 Edit `compose.yaml` / `.env`:
 
 - `MEMORY_ALLOCATION`: Pack server RAM for `server` / `serverpack` (default: 8G)
 - `MODPACK_ARCHIVE`: Fabric server pack (default: `the-modpack.mrpack`)
+- `PACK_STEM`: itzg pack stem (default: `bias` → `bias-update-server.mrpack`)
+- `WORLD_VOLUME`: itzg world volume (default: `mc-bias`)
 
 Server settings: `server.properties`
 
 ## Optional: Process Modpack
 
-Updates `.mrpack` client/server `env` flags from Modrinth project metadata:
+Rewrites `.mrpack` client/server `env` flags from Modrinth project metadata.
+Versions stay as exported. `server=unsupported` files are omitted. bias
+mounts `<stem>-update-server.mrpack`, not this output.
 
 ```bash
 pnpm install

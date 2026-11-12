@@ -6,5 +6,5 @@ export {
   resolvePackFiles,
   type VersionQuery,
 } from './api.js';
-export { processAndLogFile } from './env.js';
+export { keptFiles, processAndLogFile, serverFiles } from './env.js';
 export type * from './types.js';

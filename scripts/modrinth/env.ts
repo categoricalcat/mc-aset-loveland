@@ -48,7 +48,7 @@ export const processAndLogFile = async (
   file: File,
   index: number,
   total: number,
-): Promise<{ error: boolean; file: File | null }> => {
+): Promise<{ error: boolean; file: File }> => {
   console.log(`Processing ${index + 1}/${total}: ${file.path}`);
 
   const processed = await processFile(file);
@@ -62,8 +62,10 @@ export const processAndLogFile = async (
 
   const { client, server } = processed.file.env;
   if (server === 'unsupported') {
-    console.log(`  Dropping ${file.path}: server=${server}`);
-    return { error, file: null };
+    console.log(
+      `  Client-only ${file.path}: client=${client}, server=${server}`,
+    );
+    return { error, file: processed.file };
   }
 
   if (processed.project === 'error') {
@@ -86,3 +88,13 @@ export const processAndLogFile = async (
 
   return { error, file: processed.file };
 };
+
+export const keptFiles = (
+  processed: readonly { file: File | null }[],
+): File[] =>
+  processed
+    .map(({ file }) => file)
+    .filter((file): file is File => file !== null);
+
+export const serverFiles = (files: readonly File[]): File[] =>
+  files.filter(file => file.env.server !== 'unsupported');

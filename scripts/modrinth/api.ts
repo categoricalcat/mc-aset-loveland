@@ -389,6 +389,12 @@ export const resolvePackFiles = async (
       item.base,
     );
     if (result === null) {
+      // Resource packs and shader packs are not loader mods. A miss there
+      // keeps the exported file; a mod with no 26.3 build is dropped.
+      if (item.base !== null && !item.base.path.startsWith('mods/')) {
+        resolved.push(item.base);
+        continue;
+      }
       unresolved.push(item.base?.path ?? item.projectId);
       continue;
     }

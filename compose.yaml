@@ -122,17 +122,20 @@ services:
       EULA: 'TRUE'
       # MC + loader versions come from the mrpack; re-applied when it changes.
       TYPE: 'MODRINTH'
-      MODRINTH_MODPACK: '/data/modpacks/bias-processed.mrpack'
+      MODRINTH_MODPACK: /data/modpacks/${PACK_STEM:-bias}-update-server.mrpack
       MEMORY: '8G'
       USE_AIKAR_FLAGS: 'true'
       JVM_XX_OPTS: '-XX:+UseTransparentHugePages'
       SKIP_SERVER_PROPERTIES: 'TRUE'
       SERVER_PORT: '25564'
+      # Host c2me.toml is copied onto the volume after the modpack install.
+      SYNC_SKIP_NEWER_IN_DESTINATION: 'false'
     volumes:
-      - 'mc-bias:/data'
+      - world:/data
       - ./server.properties:/data/server.properties:ro
+      - ./c2me.toml:/config/c2me.toml:ro
       - ./server-icon.png:/data/server-icon.png:ro
-      - ./bias-processed.mrpack:/data/modpacks/bias-processed.mrpack:ro
+      - ./${PACK_STEM:-bias}-update-server.mrpack:/data/modpacks/${PACK_STEM:-bias}-update-server.mrpack:ro
     env_file:
       - .env
     depends_on:
@@ -147,8 +150,8 @@ volumes:
     name: mc-data
   mc-serverpack:
     name: mc-serverpack
-  mc-bias:
-    name: mc-bias
+  world:
+    name: ${WORLD_VOLUME:-mc-bias}
 
 networks:
   mc-egress: # NAT'd outbound; only for services that need the internet

@@ -5,8 +5,10 @@ home/
 docs/
 *.log
 
-# bias pack is volume-mounted into the itzg service, never COPYed in a build
+# itzg mounts these; the image build only COPYs ServerPack.zip and the-modpack*.mrpack
 bias.mrpack
 bias-processed.mrpack
+*-update-client.mrpack
+*-update-server.mrpack
 
 # ServerPack.zip and the-modpack*.mrpack stay: Dockerfile COPYs ${PACK}

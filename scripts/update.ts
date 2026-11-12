@@ -1,32 +1,24 @@
 import {
-  type File,
+  keptFiles,
   type ModrinthIndex,
-  parseModrinthIndex,
   processAndLogFile,
   resolvePackFiles,
+  serverFiles,
 } from '@modrinth';
 import fs from 'fs/promises';
 import path from 'path';
 
 import { config } from './config.js';
 import { latestLoaderVersion, type Loader } from './loaders.js';
-import { extractZip, readJson, zipFolder } from './utils.js';
+import { reportLookupErrors, runPack } from './pack.js';
+import { zipFolder } from './utils.js';
 
 const GAME = '26.3';
+const packStem = path.basename(config.mrpackPath, '.mrpack');
+const serverPackPath = `${packStem}-update-server.mrpack`;
+const clientPackPath = `${packStem}-update-client.mrpack`;
 
-const run = async (): Promise<void> => {
-  await extractZip(config.mrpackPath, config.backupDir);
-  console.log(`Extracted ${config.mrpackPath} to ${config.backupDir}`);
-
-  const indexPath = path.join(config.backupDir, config.indexPath);
-  const index = parseModrinthIndex(await readJson(indexPath));
-  if (index === null) throw new Error(`invalid index ${indexPath}`);
-  // Pre-26.3 copies here would load alongside the resolved mods.
-  await fs.rm(path.join(config.backupDir, 'overrides', 'mods'), {
-    force: true,
-    recursive: true,
-  });
-
+const outcome = await runPack(serverPackPath, 'updating', async index => {
   const loader: Loader =
     index.dependencies.neoforge === undefined ? 'fabric' : 'neoforge';
   const loaderKey = loader === 'neoforge' ? 'neoforge' : 'fabric-loader';
@@ -40,44 +32,86 @@ const run = async (): Promise<void> => {
   const processed = await Array.fromAsync(files, (file, i) =>
     processAndLogFile(file, i, files.length),
   );
+  const allFiles = keptFiles(processed);
+  // A required dep can be the updated copy of a jar Prism left in overrides/mods.
+  const modSlug = (filename: string): string =>
+    path
+      .basename(filename, '.jar')
+      .toLowerCase()
+      .split(/[-+_](?=\d|mc\d|v\d|fabric|neoforge|forge|quilt)/)[0] ?? '';
+  const indexed = new Set(
+    allFiles
+      .filter(file => file.path.startsWith('mods/'))
+      .map(file => modSlug(file.path)),
+  );
+  const overrideMods = path.join(config.backupDir, 'overrides', 'mods');
+  const overrideJars = await fs
+    .readdir(overrideMods)
+    .catch((caught: unknown) => {
+      if (
+        caught instanceof Error &&
+        'code' in caught &&
+        caught.code === 'ENOENT'
+      ) {
+        return [];
+      }
+      throw caught;
+    });
+  const duplicateOverrides = overrideJars.filter(name =>
+    indexed.has(modSlug(name)),
+  );
+  await Promise.all(
+    duplicateOverrides.map(name => fs.rm(path.join(overrideMods, name))),
+  );
+  if (duplicateOverrides.length > 0) {
+    console.log(
+      `Removed override jars already in the index: ${duplicateOverrides.join(', ')}`,
+    );
+  }
 
-  const updatedIndex: ModrinthIndex = {
+  const updated = {
     ...index,
     dependencies: {
       ...index.dependencies,
       [loaderKey]: loaderVersion,
       minecraft: GAME,
     },
-    files: processed
-      .map(({ file }) => file)
-      .filter((file): file is File => file !== null),
-  };
+    files: allFiles,
+  } satisfies ModrinthIndex;
 
-  await fs.writeFile(indexPath, JSON.stringify(updatedIndex));
-  const outPath = config.mrpackPath.replace(/\.mrpack$/, `-${GAME}.mrpack`);
-  await zipFolder(config.backupDir, outPath);
+  // Client zip still has overrides/mods. Server installers extract that
+  // directory, so it is removed before the server zip.
+  const indexPath = path.join(config.backupDir, config.indexPath);
+  await fs.writeFile(indexPath, JSON.stringify(updated));
+  await zipFolder(config.backupDir, clientPackPath);
+  await fs.rm(path.join(config.backupDir, 'overrides', 'mods'), {
+    force: true,
+    recursive: true,
+  });
+
+  return {
+    clientCount: allFiles.length,
+    errors: processed.filter(({ error }) => error).length,
+    index: {
+      ...updated,
+      files: serverFiles(allFiles),
+    } satisfies ModrinthIndex,
+    loader,
+    loaderKey,
+    loaderVersion,
+    unresolved,
+  };
+});
+
+if (outcome !== undefined) {
+  await fs.rm('bias-updated.mrpack', { force: true });
   console.log(
-    `Created updated pack at ${outPath} (${updatedIndex.files.length} mods, ${loaderKey} ${loaderVersion})`,
+    `Created ${clientPackPath} (${outcome.clientCount} files) and ${serverPackPath} (${outcome.index.files.length} files), ${outcome.loaderKey} ${outcome.loaderVersion}`,
   );
-  if (unresolved.length > 0) {
+  if (outcome.unresolved.length > 0) {
     console.log(
-      `Removed (no ${GAME} ${loader} build): ${unresolved.join(', ')}`,
+      `Removed (no ${GAME} ${outcome.loader} build): ${outcome.unresolved.join(', ')}`,
     );
   }
-
-  const errorCount = processed.filter(({ error }) => error).length;
-  if (errorCount > 0) {
-    console.error(`\n${errorCount} Modrinth lookup error(s); see log above`);
-    process.exitCode = 1;
-  }
-};
-
-try {
-  await run();
-} catch (caught) {
-  console.error(
-    'Error updating modpack:',
-    caught instanceof Error ? caught : new Error('modpack update failed'),
-  );
-  process.exitCode = 1;
+  reportLookupErrors(outcome.errors);
 }
