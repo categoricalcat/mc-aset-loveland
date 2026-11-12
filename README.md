@@ -134,6 +134,22 @@ exported file. The server pack then omits `server=unsupported` files.
 `overrides/mods` is only in the client pack. A run also deletes a leftover
 `bias-updated.mrpack`.
 
+Conflict check: before either pack is written, the run fails (exit 1, no
+zip) on any declared conflict:
+
+- a Modrinth `incompatible` dependency between two mods in the pack
+  (whole project when `version_id` is null; that version when it is set)
+- two `overrides/mods` jars from the same Modrinth project or with the same
+  Fabric mod id
+- a Fabric `breaks` entry with range `*` naming another override jar
+
+Override jars are matched to Modrinth by sha1. A match whose project is
+already in the index is removed. Unmatched jars fall back to the filename
+prefix. Pinned `required` versions, `embedded` projects also shipped as their
+own file, Fabric `conflicts` entries, and `breaks` entries with any other
+range (not evaluated) are printed as warnings. Undeclared mixin or class
+clashes are not detected.
+
 ### server / serverpack (image)
 
 The pack is the only manual input. Minecraft, loader and Java versions are

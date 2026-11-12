@@ -7,6 +7,7 @@ import type {
   ModrinthIndex,
   ModrinthProject,
   ModrinthVersion,
+  ResolvedVersion,
   VersionDependency,
   VersionFile,
 } from './types.js';
@@ -27,6 +28,19 @@ const side = (value: Json | undefined): Env['client'] =>
   value === 'optional' || value === 'required' || value === 'unsupported'
     ? value
     : 'optional';
+
+const parseEach = <I, T>(
+  items: readonly I[],
+  parse: (item: I) => null | T,
+): null | T[] => {
+  const parsed: T[] = [];
+  for (const item of items) {
+    const value = parse(item);
+    if (value === null) return null;
+    parsed.push(value);
+  }
+  return parsed;
+};
 
 const parseProject = (body: Json): ModrinthProject | null => {
   if (!isJsonObject(body) || typeof body['id'] !== 'string') return null;
@@ -70,8 +84,14 @@ const parseVersionDependency = (body: Json): null | VersionDependency => {
     return null;
   }
   const projectId = body['project_id'];
+  const versionId = body['version_id'];
   if (typeof projectId !== 'string' && projectId !== null) return null;
-  return { dependency_type: body['dependency_type'], project_id: projectId };
+  if (typeof versionId !== 'string' && versionId !== null) return null;
+  return {
+    dependency_type: body['dependency_type'],
+    project_id: projectId,
+    version_id: versionId,
+  };
 };
 
 const parseVersion = (body: Json): ModrinthVersion | null => {
@@ -102,18 +122,9 @@ const parseVersion = (body: Json): ModrinthVersion | null => {
   ) {
     return null;
   }
-  const parsedFiles: VersionFile[] = [];
-  for (const file of files) {
-    const parsed = parseVersionFile(file);
-    if (parsed === null) return null;
-    parsedFiles.push(parsed);
-  }
-  const parsedDependencies: VersionDependency[] = [];
-  for (const dependency of dependencies) {
-    const parsed = parseVersionDependency(dependency);
-    if (parsed === null) return null;
-    parsedDependencies.push(parsed);
-  }
+  const parsedFiles = parseEach(files, parseVersionFile);
+  const parsedDependencies = parseEach(dependencies, parseVersionDependency);
+  if (parsedFiles === null || parsedDependencies === null) return null;
   return {
     date_published: datePublished,
     dependencies: parsedDependencies,
@@ -127,16 +138,8 @@ const parseVersion = (body: Json): ModrinthVersion | null => {
   };
 };
 
-const parseVersionList = (body: Json): ModrinthVersion[] | null => {
-  if (!Array.isArray(body)) return null;
-  const versions: ModrinthVersion[] = [];
-  for (const entry of body) {
-    const parsed = parseVersion(entry);
-    if (parsed === null) return null;
-    versions.push(parsed);
-  }
-  return versions;
-};
+const parseVersionList = (body: Json): ModrinthVersion[] | null =>
+  Array.isArray(body) ? parseEach(body, parseVersion) : null;
 
 const parseFile = (body: Json): File | null => {
   if (!isJsonObject(body)) return null;
@@ -208,13 +211,8 @@ export const parseModrinthIndex = (body: Json): ModrinthIndex | null => {
     return null;
   }
   const parsedDependencies = parseDependencies(dependencies);
-  if (parsedDependencies === null) return null;
-  const parsedFiles: File[] = [];
-  for (const file of files) {
-    const parsed = parseFile(file);
-    if (parsed === null) return null;
-    parsedFiles.push(parsed);
-  }
+  const parsedFiles = parseEach(files, parseFile);
+  if (parsedDependencies === null || parsedFiles === null) return null;
   const index: ModrinthIndex = {
     dependencies: parsedDependencies,
     files: parsedFiles,
@@ -228,8 +226,12 @@ export const parseModrinthIndex = (body: Json): ModrinthIndex | null => {
 };
 
 // Caller stays sequential: one request in flight, then the interval.
-const modrinthFetch = async (url: string, retry = true): Promise<Response> => {
-  const res = await request(url);
+const modrinthFetch = async (
+  url: string,
+  init?: RequestInit,
+  retry = true,
+): Promise<Response> => {
+  const res = await request(url, init);
   if (res.status === 429 && retry) {
     const retryAfter = retryAfterSeconds(
       res.headers.get('Retry-After'),
@@ -238,7 +240,7 @@ const modrinthFetch = async (url: string, retry = true): Promise<Response> => {
     console.warn(`  Rate limited, retrying in ${retryAfter}s`);
     await res.body?.cancel();
     await delay(retryAfter * 1000);
-    return modrinthFetch(url, false);
+    return modrinthFetch(url, init, false);
   }
   await delay(REQUEST_INTERVAL_MS);
   return res;
@@ -284,6 +286,29 @@ const fetchVersions = async (
   return versions;
 };
 
+/** Maps each sha1 Modrinth knows to its version; unknown hashes are absent. */
+export const fetchVersionsByHash = async (
+  hashes: readonly string[],
+): Promise<Map<string, ModrinthVersion>> => {
+  if (hashes.length === 0) return new Map();
+  const res = await modrinthFetch('https://api.modrinth.com/v2/version_files', {
+    body: JSON.stringify({ algorithm: 'sha1', hashes }),
+    headers: { 'content-type': 'application/json' },
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+  const body = parseJson(await res.text());
+  const invalidPayload = 'invalid version_files payload';
+  if (!isJsonObject(body)) throw new Error(invalidPayload);
+  const entries = parseEach(Object.entries(body), ([hash, raw]) => {
+    const version = parseVersion(raw);
+    return version === null ? null : ([hash, version] as const);
+  });
+  if (entries === null) throw new Error(invalidPayload);
+  return new Map(entries);
+};
+
 const cacheDir = join(process.cwd(), config.cacheDir);
 
 export const getProject = withFileCache(
@@ -313,23 +338,15 @@ const newestRelease = (
 };
 
 const indexFile = (
-  version: ModrinthVersion,
   versionFile: VersionFile,
   base: File | null,
   dir: string,
-): { file: File; requiredProjectIds: string[] } => ({
-  file: {
-    downloads: [versionFile.url],
-    env: base?.env ?? { client: 'required', server: 'required' },
-    fileSize: versionFile.size,
-    hashes: versionFile.hashes,
-    path: `${dir}${versionFile.filename}`,
-  },
-  requiredProjectIds: version.dependencies.flatMap(dep =>
-    dep.dependency_type === 'required' && dep.project_id !== null
-      ? [dep.project_id]
-      : [],
-  ),
+): File => ({
+  downloads: [versionFile.url],
+  env: base?.env ?? { client: 'required', server: 'required' },
+  fileSize: versionFile.size,
+  hashes: versionFile.hashes,
+  path: `${dir}${versionFile.filename}`,
 });
 
 const resolveProject = async (
@@ -337,7 +354,7 @@ const resolveProject = async (
   game: string,
   loader: string,
   base: File | null,
-): Promise<null | { file: File; requiredProjectIds: string[] }> => {
+): Promise<null | { file: File; version: ModrinthVersion }> => {
   const versions =
     (await fetchProjectVersions({
       game,
@@ -352,7 +369,7 @@ const resolveProject = async (
     base === null
       ? 'mods/'
       : base.path.slice(0, base.path.lastIndexOf('/') + 1);
-  return indexFile(version, versionFile, base, dir);
+  return { file: indexFile(versionFile, base, dir), version };
 };
 
 /**
@@ -363,8 +380,13 @@ export const resolvePackFiles = async (
   files: readonly File[],
   game: string,
   loader: string,
-): Promise<{ files: File[]; unresolved: string[] }> => {
-  const resolved: File[] = [];
+): Promise<{
+  files: File[];
+  resolved: Map<string, ResolvedVersion>;
+  unresolved: string[];
+}> => {
+  const chosen: File[] = [];
+  const resolved = new Map<string, ResolvedVersion>();
   const unresolved: string[] = [];
   const seen = new Set<string>();
   const pending: { base: File | null; projectId: string }[] = [];
@@ -392,19 +414,26 @@ export const resolvePackFiles = async (
       // Resource packs and shader packs are not loader mods. A miss there
       // keeps the exported file; a mod with no 26.3 build is dropped.
       if (item.base !== null && !item.base.path.startsWith('mods/')) {
-        resolved.push(item.base);
+        chosen.push(item.base);
         continue;
       }
       unresolved.push(item.base?.path ?? item.projectId);
       continue;
     }
-    resolved.push(result.file);
-    for (const projectId of result.requiredProjectIds) {
-      if (seen.has(projectId)) continue;
-      seen.add(projectId);
-      pending.push({ base: null, projectId });
+    chosen.push(result.file);
+    resolved.set(item.projectId, { ...result.version, path: result.file.path });
+    for (const dep of result.version.dependencies) {
+      if (
+        dep.dependency_type !== 'required' ||
+        dep.project_id === null ||
+        seen.has(dep.project_id)
+      ) {
+        continue;
+      }
+      seen.add(dep.project_id);
+      pending.push({ base: null, projectId: dep.project_id });
     }
   }
 
-  return { files: resolved, unresolved };
+  return { files: chosen, resolved, unresolved };
 };

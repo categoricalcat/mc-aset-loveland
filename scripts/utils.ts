@@ -1,4 +1,5 @@
 import AdmZip from 'adm-zip';
+import { createHash } from 'crypto';
 import fs from 'fs/promises';
 import { dirname, join } from 'path';
 
@@ -62,6 +63,14 @@ export const extractZip = async (
   await fs.mkdir(outputDir, { recursive: true });
   new AdmZip(zipPath).extractAllTo(outputDir, true);
 };
+
+export const sha1File = async (path: string): Promise<string> =>
+  createHash('sha1')
+    .update(await fs.readFile(path))
+    .digest('hex');
+
+export const readZipText = (zipPath: string, entry: string): null | string =>
+  new AdmZip(zipPath).getEntry(entry)?.getData().toString('utf8') ?? null;
 
 export const zipFolder = (folder: string, outZip: string): Promise<void> =>
   new Promise((resolve, reject) => {

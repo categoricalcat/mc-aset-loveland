@@ -50,9 +50,17 @@ export interface ModrinthVersion {
   version_type: string;
 }
 
+export interface ResolvedVersion extends Pick<
+  ModrinthVersion,
+  'dependencies' | 'id' | 'project_id'
+> {
+  path: string;
+}
+
 export interface VersionDependency {
   dependency_type: string;
   project_id: null | string;
+  version_id: null | string;
 }
 
 export interface VersionFile {
