@@ -10,7 +10,11 @@
         programs = {
           # ts/js/json/yaml/md; config in package.json. prettier owns markdown.
           prettier.enable = true;
+          # prettier rewrites YAML 1.1 merge keys (`<<:`) to `!!merge`.
+          prettier.excludes = [ "compose.yaml" ];
           mdformat.enable = lib.mkForce false;
+          # VS Code JSON is JSONC. jsonfmt is encoding/json and rejects `//`.
+          jsonfmt.excludes = [ ".vscode/*.json" ];
         };
         settings = {
           global.excludes = [

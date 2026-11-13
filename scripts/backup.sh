@@ -55,7 +55,7 @@ freeze_saves_if_supported() {
     return
   fi
 
-  # RCON is disabled server-side; drive the console pipe instead (itzg only).
+  # RCON is disabled server-side; drive the console pipe instead.
   if ! docker exec "$FROZEN_CID" sh -c 'command -v mc-send-to-console >/dev/null 2>&1' 2>/dev/null; then
     echo "$SERVICE has no mc-send-to-console; backing up live volume $VOLUME without console freeze." >&2
     return
@@ -84,7 +84,7 @@ run_host_backup() {
   fi
 }
 
-# Generate exclude file for reproducible content reinstalled on boot.
+# Generate exclude file for pack-linked content (mods, libraries, jars).
 # $1 = path prefix ("." for tar -C, "$DATA_DIR" for restic)
 write_exclude_file() {
   exclude_file="$(mktemp)"

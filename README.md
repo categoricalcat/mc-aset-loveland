@@ -5,6 +5,8 @@ Dockerized Minecraft server stack supporting Modrinth (`.mrpack`) and CurseForge
 ## Tech Stack
 
 - Docker & Docker Compose
+- Nix (flake) for the server and backup images
+- Temurin 25, the only server JRE
 - NeoForge, Fabric, and Forge Minecraft servers
 - TypeScript for Modrinth modpack `env` processing
 - Playit.gg tunnel for external access
@@ -16,14 +18,18 @@ Dockerized Minecraft server stack supporting Modrinth (`.mrpack`) and CurseForge
 git clone [repo-url]
 cd mc-aset-loveland
 
-# Default stack: bias (NeoForge) + Playit tunnel
+# Load every image into docker: Nix-built asetland-server / asetland-backup and
+# digest-pinned playit-agent. Compose never builds or pulls; re-run after Nix
+# or script changes. Bump the playit pin: new digest in nix/images.nix
+# (`skopeo inspect docker://ghcr.io/playit-cloud/playit-agent:latest`), then
+# fix the hash.
+nix run .#load-images
+
+# Install the live pack. The .mrpack stays a local file; this writes .packs/bias.
+nix run .#install-pack -- .packs/bias bias-update-server.mrpack
+
+# Default stack: bias + Playit tunnel
 docker compose up -d
-
-# Local Fabric pack server on localhost:25565
-docker compose --profile server up -d
-
-# Legacy CurseForge serverpack on localhost:25566
-docker compose --profile serverpack up -d
 ```
 
 ## How to Run
@@ -40,7 +46,7 @@ docker compose logs -f server
 ## Admin (ops and whitelist)
 
 RCON and the query listener are disabled; the server is whitelist-only. Run
-console commands through the itzg console pipe (no remote port, no password):
+console commands through the console pipe (no remote port, no password):
 
 ```bash
 # Grant op / manage the whitelist (bias is whitelist-enforced)
@@ -55,9 +61,8 @@ docker attach "$(docker ps -qf label=com.docker.compose.service=bias)"
 Ops bypass the whitelist, so seeding one op is enough to get in.
 
 To bootstrap before first launch, seed `ops.json` and `whitelist.json` in the
-world volume (`asetland`); itzg leaves them untouched across modpack updates.
-(The local `server`/`serverpack` profiles preserve them via
-`scripts/start-server.sh`.)
+world volume (`asetland`). `scripts/start-server.sh` leaves them in place
+across pack updates.
 
 ## Backups
 
@@ -69,8 +74,10 @@ world volume (`asetland`); itzg leaves them untouched across modpack updates.
 docker compose --profile restore run --rm restore read
 ```
 
-Archives exclude `mods/`, `libraries/`, caches and jars — those are
-re-installed from the modpack on boot. World, config and player data are kept.
+Archives exclude `mods/`, `libraries/`, caches and jars — those are symlinks
+to the installed pack, recreated on start. World, config and player data are
+kept. A restore needs the matching `.packs` tree.
+
 Compression is `zstd -15 -T0 --long=27` (measured sweet spot: -19 bought 2%
 for +28% time, `--ultra -22` took ~60min).
 
@@ -78,8 +85,8 @@ Policy: backups are NEVER auto-deleted — no retention pruning, no restic
 forget. `.backups/` grows; curation is manual.
 
 Other volumes: `BACKUP_VOLUME=mc-data BACKUP_SERVICE=server ./scripts/backup.sh`
-(console freeze only works on itzg-based services; services without `mc-send-to-console` or
-stopped volumes are backed up directly). The host script whitelist-parses `.env`
+(console freeze runs when the container has `mc-send-to-console`; services
+without it, or stopped volumes, are backed up directly). The host script whitelist-parses `.env`
 (compose syntax is not shell-safe to source), so `BACKUP_VOLUME`,
 `BACKUP_SERVICE` and `RESTIC=1` can live there instead of inline prefixes.
 
@@ -106,7 +113,7 @@ world.
 `pnpm run update <stem>` reads `<stem>.mrpack` (default `bias.mrpack`) and
 writes two packs from that resolution:
 
-- `<stem>-update-server.mrpack` — compose mounts this into itzg (`TYPE=MODRINTH`)
+- `<stem>-update-server.mrpack` — `install-pack` reads this and writes `.packs/bias`
 - `<stem>-update-client.mrpack` — import this in Prism. Same loader and the same
   updated jars as the server pack, plus client-only mods, resource packs,
   shader packs, and `overrides/mods`
@@ -128,18 +135,24 @@ the pack, place it at `overrides/asetland/datapacks/`.
 
 ```bash
 pnpm install
-pnpm run update          # bias.mrpack -> bias-update-server.mrpack + bias-update-client.mrpack
-pnpm run update other    # other.mrpack -> other-update-server.mrpack + other-update-client.mrpack
+pnpm run update # bias.mrpack -> bias-update-server.mrpack + bias-update-client.mrpack
+nix run .#install-pack -- .packs/bias bias-update-server.mrpack
 docker compose up -d --force-recreate bias
 ```
 
-`PACK_STEM` selects which server pack `bias` mounts (default `bias`).
-`WORLD_VOLUME` selects its Docker volume (default `asetland`). A second pack
-uses its own volume; the same volume shares `mods/` and config with the
-previous pack.
+The first switch replaces `mods/`, `libraries/`, and jars on the volume with
+symlinks into `.packs/bias`. The world is left as it is. A second
+`install-pack` with the same archive sha256 does nothing. Restarting the
+container does not reinstall.
+
+`WORLD_VOLUME` selects the Docker volume (default `asetland`). Another pack
+uses its own volume; installing a different archive into `.packs/bias` and
+reusing the volume shares that volume's world with the new pack.
 
 ```bash
-PACK_STEM=other WORLD_VOLUME=mc-other docker compose up -d --force-recreate bias
+pnpm run update other
+nix run .#install-pack -- .packs/bias other-update-server.mrpack
+WORLD_VOLUME=mc-other docker compose up -d --force-recreate bias
 ```
 
 `pnpm run update` targets Minecraft 26.3. Both packs get:
@@ -172,37 +185,35 @@ own file, Fabric `conflicts` entries, and `breaks` entries with any other
 range (not evaluated) are printed as warnings. Undeclared mixin or class
 clashes are not detected.
 
-### server / serverpack (image)
+### server / serverpack
 
-The pack is the only manual input. Minecraft, loader and Java versions are
-read from it at build time (`scripts/install-pack.sh`): `.mrpack` via
-mrpack-install, CurseForge instance zip (`ServerPack.zip`) via the Forge
-installer. Mods/loader are linked from the image on every start, so the
-volume only holds world and state.
+Same image and the same Temurin 25 JRE as bias. `install-pack` does not pick
+a Java version. It writes `.packs/server` from a `.mrpack`, or
+`.packs/serverpack` from a CurseForge zip, using the Forge installer version
+named in that zip. Packs that need an older JRE are not a supported runtime.
 
-1. Replace `the-modpack.mrpack` (or set `MODPACK_ARCHIVE` in `.env`)
-2. Rebuild:
-   ```bash
-   docker compose --profile server build server
-   docker compose --profile server up -d --force-recreate server
-   ```
+```bash
+nix run .#install-pack -- .packs/server the-modpack.mrpack
+docker compose --profile server up -d --force-recreate server
+
+nix run .#install-pack -- .packs/serverpack ServerPack.zip
+docker compose --profile serverpack up -d --force-recreate serverpack
+```
 
 ## Config
 
 Edit `compose.yaml` / `.env`:
 
-- `MEMORY_ALLOCATION`: Pack server RAM for `server` / `serverpack` (default: 8G)
-- `MODPACK_ARCHIVE`: Fabric server pack (default: `the-modpack.mrpack`)
-- `PACK_STEM`: itzg pack stem (default: `bias` → `bias-update-server.mrpack`)
-- `WORLD_VOLUME`: itzg world volume (default: `asetland`)
+- `MEMORY_ALLOCATION`: heap for `bias` / `server` / `serverpack` (default: `8G`)
+- `WORLD_VOLUME`: bias world volume (default: `asetland`)
 
 Server settings: `server.properties`
 
 ## Optional: Process Modpack
 
 Rewrites `.mrpack` client/server `env` flags from Modrinth project metadata.
-Versions stay as exported. `server=unsupported` files are omitted. bias
-mounts `<stem>-update-server.mrpack`, not this output.
+Versions stay as exported. `server=unsupported` files are omitted. bias is
+installed from `<stem>-update-server.mrpack`, not this output.
 
 ```bash
 pnpm install

@@ -11,6 +11,7 @@
       imports = [
         inputs.treefmt-nix.flakeModule
         ./nix/treefmt.nix
+        ./nix/images.nix
       ];
       flake.nixosModules.asetland = ./nix/module.nix;
       perSystem =

@@ -1,11 +1,15 @@
 name: asetland
 
-# Pack servers share one Dockerfile; versions (MC, loader, Java) come from PACK.
+# Every image comes from Nix (`nix run .#load-images`); compose never builds or pulls.
+# bias, server, and serverpack share asetland-server. `nix run .#install-pack`
+# writes the tree mounted at /opt/pack; the entrypoint only links it and starts Java.
 x-pack-server: &pack-server
+  image: asetland-server
+  pull_policy: never
   stdin_open: true
   tty: true
   restart: 'no'
-  # Image runs as uid 65532 (see Dockerfile USER), so it needs no capabilities.
+  # Image runs as uid 65532 (nix/images.nix User), so it needs no capabilities.
   security_opt:
     - no-new-privileges:true
   cap_drop:
@@ -24,9 +28,7 @@ x-pack-server: &pack-server
 
 x-backup-worker: &backup-worker
   image: asetland-backup
-  build:
-    context: .
-    dockerfile: backup.dockerfile
+  pull_policy: never
   restart: 'no'
   # Runs as root; per-service cap_add restores only the file caps each op needs.
   security_opt:
@@ -36,7 +38,8 @@ x-backup-worker: &backup-worker
 
 services:
   tunnel:
-    image: ghcr.io/playit-cloud/playit-agent:latest
+    image: ghcr.io/playit-cloud/playit-agent:latest # pinned digest from nix/images.nix
+    pull_policy: never
     env_file:
       - .env
     environment:
@@ -62,10 +65,6 @@ services:
     profiles:
       - server
     cpu_shares: 4096
-    build:
-      context: .
-      args:
-        PACK: ${MODPACK_ARCHIVE:-the-modpack.mrpack}
     container_name: asetland-server
     ports:
       - '127.0.0.1:25565:25564/tcp'
@@ -75,6 +74,7 @@ services:
       - ./eula.txt:/data/eula.txt:ro
       - ./server.properties:/data/server.properties:ro
       - ./server-icon.png:/data/server-icon.png:ro
+      - ./.packs/server:/opt/pack:ro
 
   backup:
     <<: *backup-worker
@@ -127,10 +127,6 @@ services:
     <<: *pack-server
     profiles:
       - serverpack
-    build:
-      context: .
-      args:
-        PACK: ServerPack.zip
     container_name: asetland-serverpack
     ports:
       - '127.0.0.1:25566:25564/tcp'
@@ -140,48 +136,40 @@ services:
       - ./eula.txt:/data/eula.txt:ro
       - ./server.properties:/data/server.properties:ro
       - ./server-icon.png:/data/server-icon.png:ro
+      - ./.packs/serverpack:/opt/pack:ro
 
   bias:
-    image: itzg/minecraft-server:latest
+    image: asetland-server
+    pull_policy: never
     # no published ports: public access via playit tunnel only (tunnel->bias over mc-network)
     tty: true
     stdin_open: true
     # 8G heap + ~2G JVM overhead; 12G swapped on this 19GB host
     mem_limit: 10g
+    # `stop` on SIGTERM, then wait for the world to flush
+    stop_grace_period: 1m
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
-    # Start directly as itzg's uid 1000 (owner of the world volume), skipping the
-    # root chown + privilege drop, so no capabilities are needed.
+    # World volume is already uid 1000, so no capabilities are needed.
     user: '1000:1000'
     cap_drop:
       - ALL
     environment:
-      EULA: 'TRUE'
-      # MC + loader versions come from the mrpack; re-applied when it changes.
-      TYPE: 'MODRINTH'
-      MODRINTH_MODPACK: /data/modpacks/${PACK_STEM:-bias}-update-server.mrpack
-      MEMORY: '8G'
-      USE_AIKAR_FLAGS: 'true'
-      JVM_XX_OPTS: '-XX:+UseTransparentHugePages'
-      SKIP_SERVER_PROPERTIES: 'TRUE'
-      SERVER_PORT: '25564'
-      # /tmp/minecraft-console-in for mc-send-to-console (backup freeze, admin)
-      CREATE_CONSOLE_IN_PIPE: 'true'
-      # Host c2me.toml is copied onto the volume after the modpack install.
-      SYNC_SKIP_NEWER_IN_DESTINATION: 'false'
+      MEMORY_ALLOCATION: '8G'
     volumes:
       - asetland:/data
+      - ./eula.txt:/data/eula.txt:ro
       - ./server.properties:/data/server.properties:ro
-      - ./c2me.toml:/config/c2me.toml:ro
       - ./server-icon.png:/data/server-icon.png:ro
-      - ./${PACK_STEM:-bias}-update-server.mrpack:/data/modpacks/${PACK_STEM:-bias}-update-server.mrpack:ro
+      - ./c2me.toml:/opt/host/c2me.toml:ro
+      - ./.packs/bias:/opt/pack:ro
     env_file:
       - .env
     depends_on:
       - tunnel
     networks:
-      mc-egress: # outbound (mods, Mojang auth); no inbound except via tunnel/LAN binds
+      mc-egress: # outbound (Mojang auth); no inbound except via tunnel/LAN binds
       mc-network:
         ipv4_address: 172.20.0.6 # Use this for your bias server tunnel
 
