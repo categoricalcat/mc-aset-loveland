@@ -95,8 +95,21 @@ install_curseforge_pack() {
 
 install_mrpack() {
   : "${MRPACK_INSTALL_VERSION:?set via Dockerfile ARG MRPACK_INSTALL_VERSION}"
-  curl -fsSL "https://github.com/nothub/mrpack-install/releases/download/v${MRPACK_INSTALL_VERSION}/mrpack-install-${MRPACK_ARCH}" \
-    -o /usr/local/bin/mrpack-install
+  local base bin expected
+  base="https://github.com/nothub/mrpack-install/releases/download/v${MRPACK_INSTALL_VERSION}"
+  bin="mrpack-install-${MRPACK_ARCH}"
+
+  curl -fsSL "$base/$bin" -o /usr/local/bin/mrpack-install
+  # Verify against the release's published checksums (goreleaser checksums.txt),
+  # same fail-closed pattern as the JRE (sha256) and Forge (sha1) downloads.
+  curl -fsSL "$base/checksums.txt" -o /tmp/mrpack-checksums.txt
+  expected="$(awk -v f="$bin" '{sub(/\r$/, "")} $2 == f {print $1}' /tmp/mrpack-checksums.txt)"
+  [ "$expected" != "" ] || {
+    echo "no checksum for $bin in $base/checksums.txt" >&2
+    exit 1
+  }
+  printf '%s  /usr/local/bin/mrpack-install\n' "$expected" | sha256sum -c -
+
   chmod +x /usr/local/bin/mrpack-install
   mrpack-install "$PACK" --server-dir /opt/pack --server-file server.jar
 }

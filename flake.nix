@@ -13,6 +13,17 @@
         ./nix/treefmt.nix
       ];
       flake.nixosModules.asetland = ./nix/module.nix;
+      perSystem =
+        { config, pkgs, ... }:
+        {
+          devShells.default = pkgs.mkShell {
+            inputsFrom = [ config.treefmt.build.devShell ];
+            packages = [
+              pkgs.nodejs
+              pkgs.pnpm
+            ];
+          };
+        };
     };
 
   inputs = {

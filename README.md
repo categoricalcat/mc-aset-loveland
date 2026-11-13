@@ -37,10 +37,32 @@ docker compose logs -f bias
 docker compose logs -f server
 ```
 
+## Admin (ops and whitelist)
+
+RCON and the query listener are disabled; the server is whitelist-only. Run
+console commands through the itzg console pipe (no remote port, no password):
+
+```bash
+# Grant op / manage the whitelist (bias is whitelist-enforced)
+docker compose exec bias mc-send-to-console op <player>
+docker compose exec bias mc-send-to-console whitelist add <player>
+docker compose exec bias mc-send-to-console whitelist reload
+
+# Or attach to the live console (Ctrl-p Ctrl-q to detach without stopping)
+docker attach "$(docker ps -qf label=com.docker.compose.service=bias)"
+```
+
+Ops bypass the whitelist, so seeding one op is enough to get in.
+
+To bootstrap before first launch, seed `ops.json` and `whitelist.json` in the
+world volume (`asetland`); itzg leaves them untouched across modpack updates.
+(The local `server`/`serverpack` profiles preserve them via
+`scripts/start-server.sh`.)
+
 ## Backups
 
 ```bash
-# Live backup, no downtime (freezes world saves via RCON, backs up, unfreezes)
+# Live backup, no downtime (freezes world saves via server console, backs up, unfreezes)
 ./scripts/backup.sh
 
 # Restore from latest (per-volume latest-<volume>.tar.zst)
@@ -56,7 +78,7 @@ Policy: backups are NEVER auto-deleted — no retention pruning, no restic
 forget. `.backups/` grows; curation is manual.
 
 Other volumes: `BACKUP_VOLUME=mc-data BACKUP_SERVICE=server ./scripts/backup.sh`
-(RCON freeze only works on itzg-based services; services without `rcon-cli` or
+(console freeze only works on itzg-based services; services without `mc-send-to-console` or
 stopped volumes are backed up directly). The host script whitelist-parses `.env`
 (compose syntax is not shell-safe to source), so `BACKUP_VOLUME`,
 `BACKUP_SERVICE` and `RESTIC=1` can live there instead of inline prefixes.
@@ -98,7 +120,7 @@ Prism export, check:
 - `config` — kept as `overrides/config`.
 - `resourcepacks` and `shaderpacks` — kept on the client pack.
 
-Leave `saves` unchecked. The world is volume `mc-bias`
+Leave `saves` unchecked. The world is volume `asetland`
 (`level-name=asetland`); an exported save overwrites it. Leave `logs` and
 `crash-reports` unchecked. NeoForge 26 loads coremods from mod jars. World
 datapacks belong in that volume at `asetland/datapacks/`. To ship one inside
@@ -112,7 +134,7 @@ docker compose up -d --force-recreate bias
 ```
 
 `PACK_STEM` selects which server pack `bias` mounts (default `bias`).
-`WORLD_VOLUME` selects its Docker volume (default `mc-bias`). A second pack
+`WORLD_VOLUME` selects its Docker volume (default `asetland`). A second pack
 uses its own volume; the same volume shares `mods/` and config with the
 previous pack.
 
@@ -172,7 +194,7 @@ Edit `compose.yaml` / `.env`:
 - `MEMORY_ALLOCATION`: Pack server RAM for `server` / `serverpack` (default: 8G)
 - `MODPACK_ARCHIVE`: Fabric server pack (default: `the-modpack.mrpack`)
 - `PACK_STEM`: itzg pack stem (default: `bias` → `bias-update-server.mrpack`)
-- `WORLD_VOLUME`: itzg world volume (default: `mc-bias`)
+- `WORLD_VOLUME`: itzg world volume (default: `asetland`)
 
 Server settings: `server.properties`
 

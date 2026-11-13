@@ -17,7 +17,18 @@ let
 in
 {
   options.services.asetland = {
-    enable = lib.mkEnableOption "asetland Minecraft server (docker compose project)";
+    # Compose stays the source of truth, brought up/down by hand; these units are
+    # inert wrappers until autoStart / backupSchedule opt in.
+    enable = lib.mkEnableOption "asetland systemd wrappers around the docker compose project";
+
+    autoStart = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Start the stack at boot. When false the unit only runs on an explicit
+        `systemctl start asetland`, leaving manual `docker compose up/down` alone.
+      '';
+    };
 
     workingDir = lib.mkOption {
       type = lib.types.path;
@@ -38,9 +49,13 @@ in
     };
 
     backupSchedule = lib.mkOption {
-      type = lib.types.str;
-      default = "daily";
-      description = "systemd OnCalendar value for world backups.";
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "daily";
+      description = ''
+        systemd OnCalendar value for world backups; null installs no timer
+        (asetland-backup.service can still be started by hand).
+      '';
     };
   };
 
@@ -48,7 +63,7 @@ in
     systemd = {
       services.asetland = {
         description = "asetland Minecraft server (compose up)";
-        wantedBy = [ "multi-user.target" ];
+        wantedBy = lib.optional cfg.autoStart "multi-user.target";
         after = [
           "network-online.target"
           "docker.service"
@@ -72,9 +87,9 @@ in
       };
 
       services.asetland-backup = {
-        description = "asetland world backup (RCON freeze -> tar|zstd -> unfreeze)";
+        description = "asetland world backup (console freeze -> tar|zstd -> unfreeze)";
+        # no `wants`: a backup must never start a manually stopped stack
         after = [ "asetland.service" ];
-        wants = [ "asetland.service" ];
         path = [
           pkgs.docker
           pkgs.podman-compose
@@ -87,7 +102,7 @@ in
         };
       };
 
-      timers.asetland-backup = {
+      timers.asetland-backup = lib.mkIf (cfg.backupSchedule != null) {
         description = "asetland world backup schedule";
         wantedBy = [ "timers.target" ];
         timerConfig = {

@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # Unified backup entrypoint:
-#   host mode (default):   ./scripts/backup.sh   RCON freeze -> backup -> unfreeze
+#   host mode (default):   ./scripts/backup.sh   console freeze -> backup -> unfreeze
 #   worker mode (compose): OPERATION=write|read|restic (or $1) inside container
 # Reproducible content (mods, libraries, caches, jars) is excluded everywhere.
 set -eu
@@ -8,7 +8,7 @@ set -eu
 # shellcheck disable=SC3040
 set -o pipefail 2>/dev/null || true
 
-DEFAULT_VOLUME="mc-bias"
+DEFAULT_VOLUME="asetland"
 DEFAULT_SERVICE="bias"
 PROJECT_NAME="${COMPOSE_PROJECT_NAME:-asetland}"
 BACKUP_DIR="${BACKUP_DIR:-/backup}"
@@ -55,15 +55,20 @@ freeze_saves_if_supported() {
     return
   fi
 
-  if ! docker exec "$FROZEN_CID" sh -c 'command -v rcon-cli >/dev/null 2>&1' 2>/dev/null; then
-    echo "$SERVICE has no rcon-cli; backing up live volume $VOLUME without RCON freeze." >&2
+  # RCON is disabled server-side; drive the console pipe instead (itzg only).
+  if ! docker exec "$FROZEN_CID" sh -c 'command -v mc-send-to-console >/dev/null 2>&1' 2>/dev/null; then
+    echo "$SERVICE has no mc-send-to-console; backing up live volume $VOLUME without console freeze." >&2
     return
   fi
 
   echo "Freezing world saves on $SERVICE..."
-  docker exec "$FROZEN_CID" rcon-cli save-all flush
-  docker exec "$FROZEN_CID" rcon-cli save-off
-  trap 'docker exec "$FROZEN_CID" rcon-cli save-on' EXIT
+  # mc-send-to-console is fire-and-forget: disable auto-save, force a flush, then
+  # let the server drain pending region writes before the archive reads /data.
+  # Trap first so an interrupt mid-flush still re-enables saves.
+  trap 'docker exec "$FROZEN_CID" mc-send-to-console save-on' EXIT
+  docker exec "$FROZEN_CID" mc-send-to-console save-off
+  docker exec "$FROZEN_CID" mc-send-to-console save-all flush
+  sleep 5
 }
 
 run_host_backup() {

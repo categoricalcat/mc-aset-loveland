@@ -5,6 +5,11 @@ x-pack-server: &pack-server
   stdin_open: true
   tty: true
   restart: 'no'
+  # Image runs as uid 65532 (see Dockerfile USER), so it needs no capabilities.
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
   env_file:
     - .env
   environment:
@@ -23,6 +28,11 @@ x-backup-worker: &backup-worker
     context: .
     dockerfile: backup.dockerfile
   restart: 'no'
+  # Runs as root; per-service cap_add restores only the file caps each op needs.
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
 
 services:
   tunnel:
@@ -34,7 +44,18 @@ services:
     networks:
       - mc-egress # outbound to playit relays
       - mc-network # reach bias at 172.20.0.6
-    restart: 'no'
+    # Stateless outbound agent (config comes from SECRET_KEY): no writes.
+    # If the agent ever fails to start, drop read_only first.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN # playitd >=2.0 chowns /run/playit/playitd.sock to its group
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
 
   server:
     <<: *pack-server
@@ -47,8 +68,8 @@ services:
         PACK: ${MODPACK_ARCHIVE:-the-modpack.mrpack}
     container_name: asetland-server
     ports:
-      - '25565:25564/tcp'
-      - '25565:25564/udp'
+      - '127.0.0.1:25565:25564/tcp'
+      - '127.0.0.1:25565:25564/udp'
     volumes:
       - mc-data:/data
       - ./eula.txt:/data/eula.txt:ro
@@ -59,11 +80,14 @@ services:
     <<: *backup-worker
     environment:
       - OPERATION=write
-      - BACKUP_VOLUME=${BACKUP_VOLUME:-mc-bias}
+      - BACKUP_VOLUME=${BACKUP_VOLUME:-asetland}
     profiles:
       - backup
+    # read uid-1000 world files (/data is ro) + write a user-owned .backups on rootful docker
+    cap_add:
+      - DAC_OVERRIDE
     volumes:
-      - ${BACKUP_VOLUME:-mc-bias}:/data:ro # target volume, read-only
+      - ${BACKUP_VOLUME:-asetland}:/data:ro # target volume, read-only
       - ./.backups:/backup # host folder that rclone will read from
       - ./scripts/backup.sh:/script/backup.sh:ro
 
@@ -71,11 +95,15 @@ services:
     <<: *backup-worker
     environment:
       - OPERATION=read
-      - BACKUP_VOLUME=${BACKUP_VOLUME:-mc-bias}
+      - BACKUP_VOLUME=${BACKUP_VOLUME:-asetland}
     profiles:
       - restore
+    cap_add: # wipe + extract with original ownership
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
     volumes:
-      - ${BACKUP_VOLUME:-mc-bias}:/data # restore target
+      - ${BACKUP_VOLUME:-asetland}:/data # restore target
       - ./.backups:/backup:ro # host backups folder, read-only
       - ./scripts/backup.sh:/script/backup.sh:ro
 
@@ -87,9 +115,11 @@ services:
       - .env
     environment:
       - OPERATION=restic
-      - BACKUP_VOLUME=${BACKUP_VOLUME:-mc-bias}
+      - BACKUP_VOLUME=${BACKUP_VOLUME:-asetland}
+    cap_add:
+      - DAC_OVERRIDE
     volumes:
-      - ${BACKUP_VOLUME:-mc-bias}:/data:ro
+      - ${BACKUP_VOLUME:-asetland}:/data:ro
       - ./.backups/restic:/repo
       - ./scripts/backup.sh:/script/backup.sh:ro
 
@@ -103,8 +133,8 @@ services:
         PACK: ServerPack.zip
     container_name: asetland-serverpack
     ports:
-      - '25566:25564/tcp'
-      - '25566:25564/udp'
+      - '127.0.0.1:25566:25564/tcp'
+      - '127.0.0.1:25566:25564/udp'
     volumes:
       - mc-serverpack:/data
       - ./eula.txt:/data/eula.txt:ro
@@ -118,6 +148,14 @@ services:
     stdin_open: true
     # 8G heap + ~2G JVM overhead; 12G swapped on this 19GB host
     mem_limit: 10g
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    # Start directly as itzg's uid 1000 (owner of the world volume), skipping the
+    # root chown + privilege drop, so no capabilities are needed.
+    user: '1000:1000'
+    cap_drop:
+      - ALL
     environment:
       EULA: 'TRUE'
       # MC + loader versions come from the mrpack; re-applied when it changes.
@@ -128,10 +166,12 @@ services:
       JVM_XX_OPTS: '-XX:+UseTransparentHugePages'
       SKIP_SERVER_PROPERTIES: 'TRUE'
       SERVER_PORT: '25564'
+      # /tmp/minecraft-console-in for mc-send-to-console (backup freeze, admin)
+      CREATE_CONSOLE_IN_PIPE: 'true'
       # Host c2me.toml is copied onto the volume after the modpack install.
       SYNC_SKIP_NEWER_IN_DESTINATION: 'false'
     volumes:
-      - world:/data
+      - asetland:/data
       - ./server.properties:/data/server.properties:ro
       - ./c2me.toml:/config/c2me.toml:ro
       - ./server-icon.png:/data/server-icon.png:ro
@@ -150,8 +190,9 @@ volumes:
     name: mc-data
   mc-serverpack:
     name: mc-serverpack
-  world:
-    name: ${WORLD_VOLUME:-mc-bias}
+  # backup workers address volumes by this key (BACKUP_VOLUME default)
+  asetland:
+    name: ${WORLD_VOLUME:-asetland}
 
 networks:
   mc-egress: # NAT'd outbound; only for services that need the internet
