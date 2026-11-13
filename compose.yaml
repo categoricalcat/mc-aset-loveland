@@ -8,6 +8,8 @@ x-pack-server: &pack-server
   pull_policy: never
   stdin_open: true
   tty: true
+  # `stop` on SIGTERM, then wait for the world to flush
+  stop_grace_period: 1m
   restart: 'no'
   # Image runs as uid 65532 (nix/images.nix User), so it needs no capabilities.
   security_opt:
@@ -139,33 +141,21 @@ services:
       - ./.packs/serverpack:/opt/pack:ro
 
   bias:
-    image: asetland-server
-    pull_policy: never
+    <<: *pack-server
     # no published ports: public access via playit tunnel only (tunnel->bias over mc-network)
-    tty: true
-    stdin_open: true
     # 8G heap + ~2G JVM overhead; 12G swapped on this 19GB host
     mem_limit: 10g
-    # `stop` on SIGTERM, then wait for the world to flush
-    stop_grace_period: 1m
     restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
     # World volume is already uid 1000, so no capabilities are needed.
     user: '1000:1000'
-    cap_drop:
-      - ALL
-    environment:
-      MEMORY_ALLOCATION: '8G'
     volumes:
       - asetland:/data
       - ./eula.txt:/data/eula.txt:ro
       - ./server.properties:/data/server.properties:ro
       - ./server-icon.png:/data/server-icon.png:ro
-      - ./c2me.toml:/opt/host/c2me.toml:ro
       - ./.packs/bias:/opt/pack:ro
-    env_file:
-      - .env
+      - ./c2me.toml:/opt/pack/config/c2me.toml:ro
+      - ./DistantHorizons.toml:/opt/pack/config/DistantHorizons.toml:ro
     depends_on:
       - tunnel
     networks:

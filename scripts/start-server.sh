@@ -73,12 +73,6 @@ stage_pack() {
 
 stage_pack
 
-# Host c2me.toml wins over the pack copy.
-if [ -f /opt/host/c2me.toml ]; then
-  mkdir -p "$DATA_DIR/config"
-  cp /opt/host/c2me.toml "$DATA_DIR/config/c2me.toml"
-fi
-
 JAVA_BIN="$JAVA_ROOT/bin/java"
 if [ ! -x "$JAVA_BIN" ]; then
   echo "JRE missing at $JAVA_BIN" >&2

@@ -1,0 +1,16 @@
+_version = 5
+
+[server]
+realTimeUpdateDistanceRadiusInChunks = 1024
+maxGenerationRequestDistance = 1024
+maxSyncOnLoadRequestDistance = 1024
+generationRequestRateLimit = 100
+syncOnLoadRateLimit = 100
+playerBandwidthLimit = 500
+enableAdaptiveTransferSpeed = true
+
+[common.multiThreading]
+numberOfThreads = 12
+
+[common.worldGenerator]
+generatorPlan = "SURFACE_THEN_CHUNKS"

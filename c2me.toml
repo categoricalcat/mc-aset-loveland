@@ -1,5 +1,6 @@
 version = 3
 
+# Playit bandwidth. Higher send rates time clients out.
 [noTickViewDistance]
 maxConcurrentChunkLoads = "2"
 chunkSendingSpeedMultiplierPercentage = "15"

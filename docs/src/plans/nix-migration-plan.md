@@ -29,13 +29,13 @@ never fetches or hashes them.
   named in the zip. The archive sha256 skips a repeat run. `.sha256` is
   written last.
 - `scripts/start-server.sh` links `/opt/pack` into `/data`, copies
-  `level-name` datapacks and an optional host `c2me.toml`, and runs Temurin 25. It does not download or choose a JRE. `mc-send-to-console` writes to
+  `level-name` datapacks, and runs Temurin 25. It does not download or choose a JRE. `mc-send-to-console` writes to
   the console fifo. bias, server, and serverpack share `asetland-server`.
 - `nix/module.nix` (`services.asetland`) wraps the compose project in systemd
   units but is inert by default: `autoStart = false` (no `wantedBy`),
   `backupSchedule = null` (no timer), and `asetland-backup` never `wants` the
   stack. Images must be loaded before `systemctl start asetland`.
-- Still outside Nix: plain `server.properties` / `c2me.toml` / `eula.txt`, and
+- Still outside Nix: plain `server.properties` / `c2me.toml` / `DistantHorizons.toml` / `eula.txt`, and
   secrets in host `.env`. bias uses `mc-egress` for Mojang auth.
 - `*.mrpack` is gitignored. The runtime JRE is Temurin 25 only; the live
   server is Minecraft 26. `bias-update-server.mrpack` is Fabric (MC 26.3,
