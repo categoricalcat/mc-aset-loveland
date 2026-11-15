@@ -43,26 +43,25 @@ docker compose logs -f bias
 docker compose logs -f server
 ```
 
-## Admin (ops and whitelist)
+## Admin (ops and bans)
 
-RCON and the query listener are disabled; the server is whitelist-only. Run
-console commands through the console pipe (no remote port, no password):
+RCON and the query listener are disabled; the whitelist is off in
+`server.properties` (`white-list=false`, `enforce-whitelist=false`), so any
+Mojang-authenticated player (`online-mode=true`) can join. Run console commands
+through the console pipe (no remote port, no password):
 
 ```bash
-# Grant op / manage the whitelist (bias is whitelist-enforced)
+# Grant op / manage bans (or re-enable whitelist in server.properties)
 docker compose exec bias mc-send-to-console op <player>
-docker compose exec bias mc-send-to-console whitelist add <player>
-docker compose exec bias mc-send-to-console whitelist reload
+docker compose exec bias mc-send-to-console ban <player>
 
 # Or attach to the live console (Ctrl-p Ctrl-q to detach without stopping)
 docker attach "$(docker ps -qf label=com.docker.compose.service=bias)"
 ```
 
-Ops bypass the whitelist, so seeding one op is enough to get in.
-
-To bootstrap before first launch, seed `ops.json` and `whitelist.json` in the
-world volume (`asetland`). `scripts/start-server.sh` leaves them in place
-across pack updates.
+To bootstrap ops before first launch, seed `ops.json` in the world volume
+(`asetland`). `scripts/start-server.sh` leaves `ops.json`, `whitelist.json`, and
+ban lists in place across pack updates.
 
 ## Backups
 
