@@ -22,6 +22,9 @@
             packages = [
               pkgs.nodejs
               pkgs.pnpm
+              # scripts/utils.ts shells out to Info-ZIP for pack archives
+              pkgs.unzip
+              pkgs.zip
             ];
           };
         };

@@ -84,31 +84,69 @@ const isUnidentified = (dep: VersionDependency): boolean =>
   dep.project_id === null &&
   dep.version_id === null;
 
+// Missing required deps are fatal only for mods: the game enforces mod
+// dependencies at launch, while resource/shader pack deps are launcher hints.
+const isModPath = (path: string): boolean =>
+  path.startsWith('mods/') || path.startsWith('overrides/mods/');
+
 const requiredMessages = (
   mods: readonly ResolvedVersion[],
   byProject: ReadonlyMap<string, ResolvedVersion[]>,
   byVersion: ReadonlyMap<null | string, ResolvedVersion[]>,
-): string[] => {
-  return mods.flatMap(mod =>
-    mod.dependencies.flatMap(dep => {
-      if (dep.dependency_type !== 'required' || isUnidentified(dep)) return [];
+  skipped: ReadonlyMap<string, string>,
+  skippedVersions: ReadonlyMap<null | string, string>,
+): { conflicts: string[]; warnings: string[] } => {
+  const conflicts: string[] = [];
+  const warnings: string[] = [];
+  for (const mod of mods) {
+    for (const dep of mod.dependencies) {
+      if (dep.dependency_type !== 'required' || isUnidentified(dep)) continue;
       const targets = dependencyTargets(dep, byProject, byVersion);
       if (targets.length === 0) {
-        return [
-          `${mod.path} requires ${dep.project_id ?? `version ${dep.version_id}`}, but it is missing`,
-        ];
+        const label = dep.project_id ?? `version ${dep.version_id}`;
+        const reason =
+          dep.project_id === null
+            ? skippedVersions.get(dep.version_id)
+            : skipped.get(dep.project_id);
+        const message = `${mod.path} requires ${label}, but ${reason ?? 'it is missing'}`;
+        (reason === undefined && isModPath(mod.path)
+          ? conflicts
+          : warnings
+        ).push(message);
+        continue;
       }
+      // A pinned version id is release metadata, not a semver range; shipping
+      // a different version of the project usually still loads fine.
       if (
         dep.version_id !== null &&
         !targets.some(target => target.id === dep.version_id)
       ) {
-        return [
+        warnings.push(
           `${mod.path} requires version ${dep.version_id} of ${dep.project_id ?? 'an external project'}`,
-        ];
+        );
       }
-      return [];
-    }),
-  );
+    }
+  }
+  return { conflicts, warnings };
+};
+
+export const missingRequiredProjects = (
+  mods: readonly ResolvedVersion[],
+): string[] => {
+  const byProject = Map.groupBy(mods, mod => mod.project_id);
+  return [
+    ...new Set(
+      mods.flatMap(mod =>
+        mod.dependencies.flatMap(dep =>
+          dep.dependency_type === 'required' &&
+          dep.project_id !== null &&
+          !byProject.has(dep.project_id)
+            ? [dep.project_id]
+            : [],
+        ),
+      ),
+    ),
+  ];
 };
 
 const duplicates = <T>(
@@ -146,6 +184,8 @@ const declared = (
 export const checkConflicts = (
   mods: readonly ResolvedVersion[],
   jars: readonly FabricMod[],
+  skipped: ReadonlyMap<string, string> = new Map(),
+  skippedVersions: ReadonlyMap<null | string, string> = new Map(),
 ): { conflicts: string[]; errors: string[]; warnings: string[] } => {
   const byProject = Map.groupBy(mods, mod => mod.project_id);
   const byVersion = Map.groupBy<null | string, ResolvedVersion>(
@@ -153,10 +193,17 @@ export const checkConflicts = (
     mod => mod.id,
   );
   const byId = Map.groupBy(jars, jar => jar.id);
+  const required = requiredMessages(
+    mods,
+    byProject,
+    byVersion,
+    skipped,
+    skippedVersions,
+  );
   return {
     conflicts: [
       ...graphMessages(mods, byProject, byVersion, conflictRules),
-      ...requiredMessages(mods, byProject, byVersion),
+      ...required.conflicts,
       ...duplicates('Modrinth project', byProject, mod => mod.path),
       ...duplicates('mod id', byId, jar => jar.file),
       ...declared(jars, byId, 'breaks', anyVersion),
@@ -170,6 +217,7 @@ export const checkConflicts = (
     ),
     warnings: [
       ...graphMessages(mods, byProject, byVersion, warningRules),
+      ...required.warnings,
       ...declared(jars, byId, 'breaks', range => !anyVersion(range)),
       ...declared(jars, byId, 'conflicts', () => true),
     ],

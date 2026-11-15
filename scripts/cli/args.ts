@@ -5,14 +5,13 @@ export const DEFAULT_GAME = '26.3';
 export const CLI_USAGE = [
   'usage:',
   '  pack update [--preserve] [--game <version>] [pack]',
-  '  pack process [--mods-only] [--write-index] [pack]',
+  '  pack process [--write-index] [pack]',
 ].join('\n');
 
 type CliCommand =
   | { command: 'help' }
   | {
       command: 'process';
-      modsOnly: boolean;
       pack: string;
       writeIndex: boolean;
     }
@@ -44,12 +43,10 @@ const commands: Record<string, CommandSpec> = {
   process: {
     build: (values, pack) => ({
       command: 'process',
-      modsOnly: values['mods-only'] === true,
       pack,
       writeIndex: values['write-index'] === true,
     }),
     options: {
-      'mods-only': { type: 'boolean' },
       'write-index': { type: 'boolean' },
     },
   },

@@ -1,10 +1,9 @@
 import {
   type Dependencies,
-  type EnvTarget,
   exportedResolvedVersions,
+  type File,
   type ModrinthClient,
   type ModrinthIndex,
-  parseProjectId,
   type ResolvedVersion,
   serverFiles,
 } from '@modrinth';
@@ -18,7 +17,6 @@ import {
   packLoader,
   type PackPaths,
   partitionOverrides,
-  refreshPackEnv,
   removeDuplicateJars,
   runPackPipeline,
   writeErrorLog,
@@ -27,7 +25,6 @@ import {
 export interface ProcessOptions {
   label?: string;
   modrinth: ModrinthClient;
-  modsOnly?: boolean;
   paths: PackPaths;
   resolve?: (index: ModrinthIndex, loader: Loader) => Promise<ResolveStep>;
   writeIndex?: boolean;
@@ -38,7 +35,7 @@ export interface ResolveStep {
   createdNote?: string;
   dependencies: Dependencies;
   extraErrors: readonly string[];
-  files: readonly EnvTarget[];
+  files: readonly File[];
   logs: readonly string[];
   resolved: ReadonlyMap<string, ResolvedVersion>;
 }
@@ -49,10 +46,7 @@ const exportedStep = async (
 ): Promise<ResolveStep> => ({
   dependencies: index.dependencies,
   extraErrors: [],
-  files: index.files.map(file => ({
-    file,
-    projectId: parseProjectId(file.downloads[0]),
-  })),
+  files: index.files,
   logs: [],
   resolved: await exportedResolvedVersions(index.files, fetchVersionById),
 });
@@ -60,7 +54,6 @@ const exportedStep = async (
 export const runProcess = async ({
   label = 'process',
   modrinth,
-  modsOnly = false,
   paths,
   resolve,
   writeIndex = false,
@@ -78,18 +71,23 @@ export const runProcess = async ({
         resolve === undefined
           ? await exportedStep(index, modrinth.fetchVersionById)
           : await resolve(index, loader);
-      const allFiles = await refreshPackEnv(
-        step.files,
-        modrinth.getProject,
-        modsOnly,
-      );
+      // Env is authoritative as exported: the pack author curates it, and
+      // update carries it through resolution. Modrinth project env is not
+      // consulted — overwriting curated env regresses working packs.
+      const allFiles = [...step.files];
       const overrides = await partitionOverrides(
         allFiles,
         step.resolved,
         overrideModsDir,
         modrinth.fetchVersionsByHash,
       );
-      const errors = assertNoConflicts(step.resolved, overrides.kept, loader);
+      const errors = await assertNoConflicts(
+        step.resolved,
+        overrides.kept,
+        loader,
+        modrinth.getProject,
+        allFiles,
+      );
 
       const updated: ModrinthIndex = {
         ...index,

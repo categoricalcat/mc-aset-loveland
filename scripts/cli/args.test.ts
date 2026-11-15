@@ -21,24 +21,14 @@ void test('parses subcommands, flags, option terminators, and pack paths', () =>
   );
   deepEqual(parseCli(['process']), {
     command: 'process',
-    modsOnly: false,
     pack: 'bias',
     writeIndex: false,
   });
-  deepEqual(
-    parseCli([
-      'process',
-      '--mods-only',
-      '--write-index',
-      'packs/custom.mrpack',
-    ]),
-    {
-      command: 'process',
-      modsOnly: true,
-      pack: 'packs/custom.mrpack',
-      writeIndex: true,
-    },
-  );
+  deepEqual(parseCli(['process', '--write-index', 'packs/custom.mrpack']), {
+    command: 'process',
+    pack: 'packs/custom.mrpack',
+    writeIndex: true,
+  });
   deepEqual(parseCli(['--help']), { command: 'help' });
   deepEqual(parseCli(['--', '--help']), { command: 'help' });
   deepEqual(parseCli(['--', 'update', '--preserve', 'other']), {
@@ -61,6 +51,7 @@ void test('rejects invalid invocations with a usage error', () => {
     ['update', '--mods-only'],
     ['update', '--game', ''],
     ['process', '--preserve'],
+    ['process', '--mods-only'],
     ['update', 'one', 'two'],
     ['process', ''],
   ]) {

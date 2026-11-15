@@ -12,8 +12,6 @@ export interface Env {
   server: 'optional' | 'required' | 'unsupported';
 }
 
-export type EnvTarget = Pick<ResolvedPackFile, 'file' | 'projectId'>;
-
 export interface File {
   downloads: string[];
   env: Env;
@@ -38,9 +36,8 @@ export interface ModrinthIndex {
 }
 
 export interface ModrinthProject {
-  client_side: Env['client'];
   id: string;
-  server_side: Env['server'];
+  loaders: string[];
 }
 
 export interface ModrinthVersion {

@@ -18,7 +18,6 @@ const runCli = async (argv: readonly string[]): Promise<void> => {
   if (parsed.command === 'process') {
     await runProcess({
       modrinth,
-      modsOnly: parsed.modsOnly,
       paths,
       writeIndex: parsed.writeIndex,
     });

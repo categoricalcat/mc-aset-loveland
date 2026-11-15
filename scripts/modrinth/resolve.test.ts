@@ -643,10 +643,58 @@ void test('drops a mod whose only build has no download', async () => {
   deepEqual(result.unresolved, ['mods/no-download.jar']);
 });
 
-void test('fails to preserve a mod whose exported version is gone', async () => {
+void test('keeps a preserved mod whose exported version is gone', async () => {
+  const gone = root('unknown');
+
+  const result = await resolve([gone], [], true);
+
+  deepEqual(result.files, [
+    { file: gone, preserve: true, projectId: 'unknown' },
+  ]);
+  deepEqual(result.issues, [
+    'mods/unknown.jar: exported version old-unknown is unavailable on Modrinth; kept as exported without dependency checks',
+  ]);
+  deepEqual(result.unresolved, []);
+});
+
+void test('keeps a mod whose project is gone from Modrinth', async () => {
+  const gone = root('delisted');
+  const versionSource: VersionSource = {
+    fetchProjectVersions: () => Promise.resolve(null),
+    fetchVersionById: () => Promise.resolve(null),
+  };
+
+  const result = await resolvePackFiles(
+    [gone],
+    '26.3',
+    'fabric',
+    versionSource,
+  );
+
+  deepEqual(result.files, [
+    { file: gone, preserve: true, projectId: 'delisted' },
+  ]);
+  deepEqual(result.issues, [
+    'mods/delisted.jar: exported version old-delisted is unavailable on Modrinth; kept as exported without dependency checks',
+  ]);
+  deepEqual(result.unresolved, []);
+});
+
+void test('reports a required dependency whose project is gone from Modrinth', async () => {
+  const app = version({
+    dependencies: [requires('delisted')],
+    id: 'app-1',
+    projectId: 'app',
+  });
+  const versionSource: VersionSource = {
+    fetchProjectVersions: ({ projectId }) =>
+      Promise.resolve(projectId === 'app' ? [app] : null),
+    fetchVersionById: () => Promise.resolve(null),
+  };
+
   await rejects(
-    resolve([root('unknown')], [], true),
-    /cannot preserve unknown: version old-unknown is unavailable/,
+    resolvePackFiles([root('app')], '26.3', 'fabric', versionSource),
+    /project delisted no longer exists on Modrinth; no compatible root version avoids it\. Replace or remove: app/,
   );
 });
 
@@ -775,6 +823,70 @@ void test('reports missing required dependencies from known override metadata', 
 
   deepEqual(conflicts, [
     'overrides/mods/override.jar requires library, but it is missing',
+  ]);
+});
+
+void test('downgrades a version pin to a warning when another version is shipped', () => {
+  const { conflicts, warnings } = checkConflicts(
+    [
+      {
+        dependencies: [requires('library', 'library-pinned')],
+        id: 'app-1',
+        path: 'mods/app.jar',
+        project_id: 'app',
+      },
+      {
+        dependencies: [],
+        id: 'library-other',
+        path: 'mods/library.jar',
+        project_id: 'library',
+      },
+    ],
+    [],
+  );
+
+  deepEqual(conflicts, []);
+  deepEqual(warnings, [
+    'mods/app.jar requires version library-pinned of library',
+  ]);
+});
+
+void test('downgrades missing resource-pack dependencies to warnings', () => {
+  const { conflicts, warnings } = checkConflicts(
+    [
+      {
+        dependencies: [requires('library')],
+        id: 'pack-1',
+        path: 'resourcepacks/pack.zip',
+        project_id: 'pack',
+      },
+    ],
+    [],
+  );
+
+  deepEqual(conflicts, []);
+  deepEqual(warnings, [
+    'resourcepacks/pack.zip requires library, but it is missing',
+  ]);
+});
+
+void test('reports deps without builds for the pack loader as warnings', () => {
+  const { conflicts, warnings } = checkConflicts(
+    [
+      {
+        dependencies: [requires('forge-lib')],
+        id: 'app-1',
+        path: 'mods/app.jar',
+        project_id: 'app',
+      },
+    ],
+    [],
+    new Map([['forge-lib', 'it has no fabric builds']]),
+  );
+
+  deepEqual(conflicts, []);
+  deepEqual(warnings, [
+    'mods/app.jar requires forge-lib, but it has no fabric builds',
   ]);
 });
 

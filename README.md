@@ -210,7 +210,8 @@ Both packs get:
   (any build when no release exists); required Modrinth dependencies are
   added, and an exact required version pin is selected instead of a newer
   project release
-- client/server `env` rewritten from Modrinth
+- client/server `env` carried over from the exported pack; newly added
+  dependencies are required on both sides
 
 Mods without a compatible build:
 
@@ -221,10 +222,11 @@ Mods without a compatible build:
   unless an updated mod also requires that project and the pin is
   incompatible; unpinned dependencies prefer a compatible build before falling
   back to an exported root version. If a preserved mod's exported version is
-  gone from Modrinth, the run fails rather than publish an unchecked
-  component.
+  gone from Modrinth, it is kept as exported without dependency checks —
+  deleting a working mod because its metadata vanished is worse than
+  shipping it unchecked.
 - Entries kept at an exported or pinned version are listed under `Preserved`
-  in the log. They still get their `env` from Modrinth and stay in
+  in the log. They keep their exported `env` and stay in
   required-dependency checks and override deduplication.
 
 When exact pins conflict, a required dependency has no compatible build, or
@@ -256,10 +258,10 @@ Common messages:
   conflict.
 - `no Fabric loader for <version>` or `no NeoForge build for <version>` — the
   target version has no loader build yet.
-- `HTTP <status>` or `<n> Modrinth lookup error(s)` — a request to Modrinth or
-  to the loader metadata server failed. Rerun once it responds.
-- `cannot preserve <project>: ...` — `update:preserve` kept a mod whose exported
-  version is gone from Modrinth.
+- `HTTP <status>` — a request to Modrinth or to the loader metadata server
+  failed. Rerun once it responds.
+- `cannot preserve <project>@<version>: no download` — a preserved or pinned
+  version still exists on Modrinth but has no downloadable file.
 
 Problems that do not stop the run go to `errors.log`: a required dependency
 with no Modrinth project or version id (an external file), and a resource or
@@ -268,18 +270,22 @@ deletes it when there is nothing to report, and prints the count. A failed run
 leaves it untouched.
 
 Conflict check: before either pack is written, the run fails on any declared
-conflict:
+conflict. The client and server packs install different file sets, so each
+side is checked against the files it actually installs:
 
 - a Modrinth `incompatible` dependency between two mods in the pack
   (whole project when `version_id` is null; that version when it is set)
-- a required Modrinth dependency is absent or resolves to a different exact
-  version
+- a required Modrinth dependency of a shipped mod is absent from the entire
+  pack
 - two `overrides/mods` jars from the same Modrinth project or with the same
   Fabric mod id
 - a Fabric `breaks` entry with range `*` naming another override jar
 
 A required dependency with no Modrinth id is not a conflict; it goes to
-`errors.log`.
+`errors.log`. Also warnings, not conflicts: a dependency shipped only on the
+other side, a dependency whose project has no builds for the pack's loader, a
+pinned version that resolves to a different shipped version, and any required
+dependency of a resource or shader pack.
 
 Override jars are matched to Modrinth by sha1. A match whose project is
 already in the index is removed. Unmatched jars fall back to the filename
@@ -315,18 +321,20 @@ Server settings: `server.properties`
 
 ## Optional: Process Modpack
 
-Refreshes a `.mrpack` without updating any packages: client/server `env`
-flags are rewritten from Modrinth project metadata, override jars already in
+Repacks a `.mrpack` without updating any packages: override jars already in
 the index are removed, and the same conflict check as `update` runs before
-either pack is published. Versions and loader pins stay as exported — that is
-the only difference from `pnpm run update`. `server=unsupported` files are
-omitted from the server pack only, lookup errors abort before replacing the
-output archives, and non-fatal problems go to `errors.log`. bias is installed
-from `<stem>-update-server.mrpack`, not this output.
+either pack is published. Versions, loader pins, and client/server `env`
+flags stay as exported — that is the only difference from `pnpm run update`.
+`server=unsupported` files are omitted from the server pack only, conflicts
+abort before replacing the output archives, and non-fatal problems go to
+`errors.log`. bias is installed from `<stem>-update-server.mrpack`, not this
+output.
+
+Requires `zip` and `unzip` on PATH (both in the nix dev shell).
 
 ```bash
 pnpm install
 pnpm run process                 # bias.mrpack -> bias-process-client.mrpack + bias-process-server.mrpack
 pnpm run process the-modpack     # the-modpack.mrpack -> the-modpack-process-client.mrpack + the-modpack-process-server.mrpack
-pnpm run process --mods-only --write-index the-modpack
+pnpm run process --write-index the-modpack
 ```

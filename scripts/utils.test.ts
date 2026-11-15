@@ -108,26 +108,28 @@ void test('treats an unparseable entry as a miss', async () => {
   }
 });
 
-void test('does not persist nulls across runs', async () => {
-  const directory = await temporaryDirectory();
-  let calls = 0;
-  try {
-    const fetchValue = () =>
-      memoizeWithResponseLog(
-        directory,
-        () => 'project.json',
-        () => {
-          calls += 1;
-          return Promise.resolve(null);
-        },
-        null,
-      )(undefined);
+void test('persists nulls across runs with the entry ttl', async () => {
+  for (const ttl of [DAY_MS, null]) {
+    const directory = await temporaryDirectory();
+    let calls = 0;
+    try {
+      const fetchValue = () =>
+        memoizeWithResponseLog(
+          directory,
+          () => 'project.json',
+          () => {
+            calls += 1;
+            return Promise.resolve(null);
+          },
+          ttl,
+        )(undefined);
 
-    strictEqual(await fetchValue(), null);
-    strictEqual(await fetchValue(), null);
-    strictEqual(calls, 2);
-  } finally {
-    await fs.rm(directory, { force: true, recursive: true });
+      strictEqual(await fetchValue(), null);
+      strictEqual(await fetchValue(), null);
+      strictEqual(calls, 1);
+    } finally {
+      await fs.rm(directory, { force: true, recursive: true });
+    }
   }
 });
 

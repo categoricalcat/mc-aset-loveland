@@ -153,9 +153,11 @@ const fallbackRootStates = async (
   const currentSignature = rootVersionSignature(rootVersions);
   for (const projectId of [...projects].sort(compareStrings)) {
     if (!roots.has(projectId)) continue;
+    // A gone project (null) has no fallback versions to try.
     const versions =
       cachedVersions.get(projectId) ??
-      (await compatibleVersions(projectId, game, loader, source));
+      (await compatibleVersions(projectId, game, loader, source)) ??
+      [];
     cachedVersions.set(projectId, versions);
     const defaultVersionId = newestRelease(versions)?.id;
     const ranked = rankedVersions(versions);

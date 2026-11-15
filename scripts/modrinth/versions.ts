@@ -21,7 +21,8 @@ export interface ConstraintSource {
   rootProjects: ReadonlySet<string>;
 }
 
-// 'unverified' keeps an asset root whose exported version is gone from Modrinth.
+// 'unverified' keeps a root whose exported version or project is gone from
+// Modrinth: assets, preserved mods, and gone-project roots alike.
 export type ProjectSelection = 'drop' | 'unverified' | Selection;
 
 export interface Selection {
@@ -126,22 +127,36 @@ export const newestRelease = (
   );
 };
 
+const goneProjectError = (
+  projectId: string,
+  sources: readonly ConstraintSource[],
+): ResolutionError =>
+  new ResolutionError(
+    'missing',
+    `project ${projectId} no longer exists on Modrinth`,
+    sources,
+  );
+
+// Null means the project itself is gone (404); an empty list means it exists
+// but has no usable build for this game and loader.
 export const compatibleVersions = async (
   projectId: string,
   game: string,
   loader: string,
   source: VersionSource,
-): Promise<ModrinthVersion[]> =>
-  (
-    (await source.fetchProjectVersions({
-      game,
-      loaders: [loader],
-      projectId,
-    })) ?? []
-  ).filter(
-    version =>
-      isCompatible(version, game, loader) && primaryFile(version) !== null,
-  );
+): Promise<ModrinthVersion[] | null> => {
+  const versions = await source.fetchProjectVersions({
+    game,
+    loaders: [loader],
+    projectId,
+  });
+  return versions === null
+    ? null
+    : versions.filter(
+        version =>
+          isCompatible(version, game, loader) && primaryFile(version) !== null,
+      );
+};
 
 export const fetchVerifiedVersion = async (
   source: VersionSource,
@@ -198,12 +213,9 @@ const preservedSelection = async (
     versionId,
     constraint.projectId,
   );
-  if (version === null) {
-    if (mode === 'asset') return 'unverified';
-    throw new Error(
-      `cannot preserve ${constraint.projectId}: version ${versionId} is unavailable`,
-    );
-  }
+  // A gone pin keeps the exported file in every mode: deleting a working mod
+  // because its metadata vanished is worse than shipping it unchecked.
+  if (version === null) return 'unverified';
   const { root } = constraint;
   const rootProjects = sourceRootProjects(constraint.sources);
   if (root?.versionId === versionId) {
@@ -223,6 +235,27 @@ const preservedSelection = async (
   };
 };
 
+// 'gone' is a missing project (404). A null version is a project that exists
+// but has no usable build for this pin, game, and loader.
+const chosenVersion = async (
+  constraint: Constraint,
+  game: string,
+  loader: string,
+  source: VersionSource,
+  pin: string | undefined,
+): Promise<'gone' | ModrinthVersion | null> => {
+  if (pin !== undefined) {
+    return fetchVerifiedVersion(source, pin, constraint.projectId);
+  }
+  const available = await compatibleVersions(
+    constraint.projectId,
+    game,
+    loader,
+    source,
+  );
+  return available === null ? 'gone' : newestRelease(available);
+};
+
 export const selectProjectVersion = async (
   constraint: Constraint,
   game: string,
@@ -240,17 +273,17 @@ export const selectProjectVersion = async (
   if (pin !== undefined && preservedReq && !targetReq) {
     return preservedSelection(constraint, pin, source, 'preserved');
   }
-  const version =
-    pin === undefined
-      ? newestRelease(
-          await compatibleVersions(constraint.projectId, game, loader, source),
-        )
-      : await fetchVerifiedVersion(source, pin, constraint.projectId);
+  const { root } = constraint;
+  const version = await chosenVersion(constraint, game, loader, source, pin);
+  // A gone project keeps its exported file; only a dep makes it fatal.
+  if (version === 'gone') {
+    if (root !== null) return 'unverified';
+    throw goneProjectError(constraint.projectId, constraint.sources);
+  }
   const file =
     version !== null && isCompatible(version, game, loader)
       ? primaryFile(version)
       : null;
-  const { root } = constraint;
   if (version !== null && file !== null) {
     return {
       file: indexFile(file, root?.file ?? null),

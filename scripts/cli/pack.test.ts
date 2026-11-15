@@ -1,4 +1,4 @@
-import type { ResolvedPackFile } from '@modrinth';
+import type { Env, File, ModrinthProject, ResolvedVersion } from '@modrinth';
 
 import { deepEqual, rejects, strictEqual } from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -8,8 +8,8 @@ import { test } from 'node:test';
 
 import { zipFolder } from '../utils.js';
 import {
+  assertNoConflicts,
   publishArchives,
-  refreshPackEnv,
   resolvePackPaths,
   runPackPipeline,
   writeErrorLog,
@@ -89,37 +89,172 @@ void test('publishing replaces both archives after staging succeeds', async () =
   }
 });
 
-const modTarget = (preserve: boolean): ResolvedPackFile => ({
-  file: {
-    downloads: ['https://cdn.modrinth.com/data/projA/versions/ver1/mod.jar'],
-    env: { client: 'required', server: 'required' },
-    fileSize: 10,
-    hashes: { sha1: 'a', sha512: 'b' },
-    path: 'mods/mod.jar',
-  },
-  preserve,
-  projectId: 'projA',
+const appWithMissingDep: ResolvedVersion = {
+  dependencies: [
+    { dependency_type: 'required', project_id: 'lib', version_id: null },
+  ],
+  id: 'app-1',
+  path: 'mods/app.jar',
+  project_id: 'app',
+};
+
+const resolvedWithMissingDep = (): ReadonlyMap<string, ResolvedVersion> =>
+  new Map([[appWithMissingDep.path, appWithMissingDep]]);
+
+const project = (loaders: string[]): ModrinthProject => ({
+  id: 'lib',
+  loaders,
 });
 
-void test('refreshPackEnv throws when a Modrinth lookup errors', async () => {
+void test('assertNoConflicts keeps a missing dep fatal when the project lookup fails', async () => {
   await rejects(
-    refreshPackEnv([modTarget(false)], () =>
-      Promise.reject(new Error('HTTP 503')),
+    assertNoConflicts(
+      resolvedWithMissingDep(),
+      [],
+      'fabric',
+      () => Promise.reject(new Error('HTTP 503')),
+      [],
     ),
-    /1 Modrinth lookup error/,
+    /mod conflicts/,
   );
 });
 
-void test('refreshPackEnv looks up env for preserved entries too', async () => {
-  const [file] = await refreshPackEnv([modTarget(true)], () =>
-    Promise.resolve({
-      client_side: 'required',
-      id: 'projA',
-      server_side: 'unsupported',
-    }),
+void test('assertNoConflicts keeps a missing dep fatal when the project is unknown to Modrinth', async () => {
+  await rejects(
+    assertNoConflicts(
+      resolvedWithMissingDep(),
+      [],
+      'fabric',
+      () => Promise.resolve(null),
+      [],
+    ),
+    /mod conflicts/,
+  );
+});
+
+void test('assertNoConflicts keeps a missing dep fatal when the project builds for the loader', async () => {
+  await rejects(
+    assertNoConflicts(
+      resolvedWithMissingDep(),
+      [],
+      'fabric',
+      () => Promise.resolve(project(['fabric'])),
+      [],
+    ),
+    /mod conflicts/,
+  );
+});
+
+void test('assertNoConflicts downgrades a missing dep with no builds for the loader', async () => {
+  const errors = await assertNoConflicts(
+    resolvedWithMissingDep(),
+    [],
+    'fabric',
+    () => Promise.resolve(project(['neoforge'])),
+    [],
   );
 
-  deepEqual(file?.env, { client: 'required', server: 'unsupported' });
+  deepEqual(errors, []);
+});
+
+const envFile = (filePath: string, env: Env): File => ({
+  downloads: [],
+  env,
+  fileSize: 1,
+  hashes: { sha1: 'a', sha512: 'b' },
+  path: filePath,
+});
+
+void test('assertNoConflicts warns when a dep is only shipped on the other side', async () => {
+  const app = appWithMissingDep;
+  const lib: ResolvedVersion = {
+    dependencies: [],
+    id: 'lib-1',
+    path: 'mods/lib.jar',
+    project_id: 'lib',
+  };
+  const resolved = new Map([
+    [app.path, app],
+    [lib.path, lib],
+  ]);
+  const files = [
+    envFile(app.path, { client: 'required', server: 'required' }),
+    envFile(lib.path, { client: 'unsupported', server: 'required' }),
+  ];
+
+  // lib is present in the pack but client-unsupported: the client side
+  // warns instead of failing, because jar metadata proves such requirements
+  // are often hints.
+  deepEqual(
+    await assertNoConflicts(
+      resolved,
+      [],
+      'fabric',
+      () => Promise.resolve(null),
+      files,
+    ),
+    [],
+  );
+
+  // Absent from the entire pack: fatal on the side that needs it.
+  const withoutLib = new Map([[app.path, app]]);
+  await rejects(
+    assertNoConflicts(
+      withoutLib,
+      [],
+      'fabric',
+      () => Promise.resolve(null),
+      files,
+    ),
+    /mod conflicts/,
+  );
+});
+
+void test('assertNoConflicts treats a version-only dep like a project dep across sides', async () => {
+  const app: ResolvedVersion = {
+    dependencies: [
+      { dependency_type: 'required', project_id: null, version_id: 'lib-1' },
+    ],
+    id: 'app-1',
+    path: 'mods/app.jar',
+    project_id: 'app',
+  };
+  const lib: ResolvedVersion = {
+    dependencies: [],
+    id: 'lib-1',
+    path: 'mods/lib.jar',
+    project_id: 'lib',
+  };
+  const files = [
+    envFile(app.path, { client: 'required', server: 'required' }),
+    envFile(lib.path, { client: 'unsupported', server: 'required' }),
+  ];
+  const getProject = (): Promise<null> => Promise.resolve(null);
+
+  deepEqual(
+    await assertNoConflicts(
+      new Map([
+        [app.path, app],
+        [lib.path, lib],
+      ]),
+      [],
+      'fabric',
+      getProject,
+      files,
+    ),
+    [],
+  );
+
+  await rejects(
+    assertNoConflicts(
+      new Map([[app.path, app]]),
+      [],
+      'fabric',
+      getProject,
+      files,
+    ),
+    /mod conflicts/,
+  );
 });
 
 void test('writeErrorLog writes entries and removes the log when there are none', async () => {

@@ -1,14 +1,13 @@
 import {
   checkConflicts,
-  type EnvTarget,
   type FabricMod,
   type File,
+  missingRequiredProjects,
   type ModrinthClient,
   type ModrinthIndex,
   type ModrinthVersion,
   parseFabricMod,
   parseModrinthIndex,
-  processAndLogFile,
   type ResolvedVersion,
 } from '@modrinth';
 import fs from 'fs/promises';
@@ -112,22 +111,6 @@ export const publishArchives = async (
   );
 };
 
-export const refreshPackEnv = async (
-  targets: readonly EnvTarget[],
-  getProject: ModrinthClient['getProject'],
-  modsOnly = false,
-): Promise<File[]> => {
-  // Must stay sequential: fetchProject throttling assumes one request in flight.
-  const processed = await Array.fromAsync(targets, (target, i) =>
-    processAndLogFile(target, i, targets.length, getProject, modsOnly),
-  );
-  const errorCount = processed.filter(({ error }) => error).length;
-  if (errorCount > 0) {
-    throw new Error(`${errorCount} Modrinth lookup error(s)`);
-  }
-  return processed.map(({ file }) => file);
-};
-
 export const writeErrorLog = (
   logPath: string,
   entries: readonly string[],
@@ -222,29 +205,113 @@ export const removeDuplicateJars = async (
   }
 };
 
-export const assertNoConflicts = (
+// A dep on a project with no builds for this loader (e.g. a NeoForge-only
+// library required by a universal jar) can never apply to this pack. A failed
+// lookup keeps the dep fatal: inapplicability must be proven, not assumed.
+const skippedDepReasons = async (
+  missing: readonly string[],
+  loader: Loader,
+  getProject: ModrinthClient['getProject'],
+): Promise<Map<string, string>> => {
+  const reasons = new Map<string, string>();
+  // Sequential: Modrinth throttling assumes one request in flight.
+  for (const projectId of missing) {
+    const project = await getProject(projectId).catch(() => null);
+    if (project !== null && !project.loaders.includes(loader)) {
+      reasons.set(projectId, `it has no ${loader} builds`);
+    }
+  }
+  return reasons;
+};
+
+const OTHER_SIDE = 'only shipped on the other side';
+
+// A message raised on both sides needs no label; a side-specific one does.
+const mergeSideMessages = (
+  client: readonly string[],
+  server: readonly string[],
+): string[] => {
+  const clientSet = new Set(client);
+  const serverSet = new Set(server);
+  return [
+    ...client.filter(message => serverSet.has(message)),
+    ...client
+      .filter(message => !serverSet.has(message))
+      .map(message => `[client] ${message}`),
+    ...server
+      .filter(message => !clientSet.has(message))
+      .map(message => `[server] ${message}`),
+  ];
+};
+
+// Checks run per installation side: the client and server zips install
+// different file sets. A dep missing from the whole pack is fatal on the
+// side that needs it; a dep shipped only on the other side warns, since jar
+// metadata proves such requirements are often hints. Override jars ship in
+// the client zip only.
+export const assertNoConflicts = async (
   resolved: ReadonlyMap<string, ResolvedVersion>,
   overrides: readonly OverrideJar[],
   loader: Loader,
-): string[] => {
-  const { conflicts, errors, warnings } = checkConflicts(
-    [
-      ...resolved.values(),
-      ...overrides.flatMap(({ name, version }) =>
-        version === undefined
-          ? []
-          : [{ ...version, path: `overrides/mods/${name}` }],
-      ),
-    ],
-    loader === 'fabric' ? overrides.flatMap(fabricMod) : [],
+  getProject: ModrinthClient['getProject'],
+  files: readonly File[],
+): Promise<string[]> => {
+  const envByPath = new Map(files.map(file => [file.path, file.env]));
+  const overrideMods = overrides.flatMap(({ name, version }) =>
+    version === undefined
+      ? []
+      : [{ ...version, path: `overrides/mods/${name}` }],
   );
-  for (const warning of warnings) console.warn(`  Warning: ${warning}`);
+  const jars = loader === 'fabric' ? overrides.flatMap(fabricMod) : [];
+  const allMods = [...resolved.values(), ...overrideMods];
+  const allProjects = new Set(allMods.map(mod => mod.project_id));
+  const skippedVersions = new Map(allMods.map(mod => [mod.id, OTHER_SIDE]));
+  const checkSide = async (
+    side: 'client' | 'server',
+  ): Promise<ReturnType<typeof checkConflicts>> => {
+    const mods = [
+      ...[...resolved.values()].filter(
+        mod =>
+          (envByPath.get(mod.path)?.[side] ?? 'required') !== 'unsupported',
+      ),
+      ...(side === 'client' ? overrideMods : []),
+    ];
+    const missing = missingRequiredProjects(mods);
+    // A dep shipped on the other side is an env split, not an absence: the
+    // pack has the project, so only a side-absent dep can be a real conflict.
+    // Those need no lookup; only side-absent deps must prove inapplicability.
+    const skipped = await skippedDepReasons(
+      missing.filter(projectId => !allProjects.has(projectId)),
+      loader,
+      getProject,
+    );
+    for (const projectId of missing) {
+      if (allProjects.has(projectId)) {
+        skipped.set(projectId, OTHER_SIDE);
+      }
+    }
+    return checkConflicts(
+      mods,
+      side === 'client' ? jars : [],
+      skipped,
+      skippedVersions,
+    );
+  };
+  // Sequential: Modrinth throttling assumes one request in flight.
+  const client = await checkSide('client');
+  const server = await checkSide('server');
+  const merged = (key: 'conflicts' | 'errors' | 'warnings'): string[] =>
+    mergeSideMessages(client[key], server[key]);
+  const conflicts = merged('conflicts');
+  for (const warning of merged('warnings')) {
+    console.warn(`  Warning: ${warning}`);
+  }
   if (conflicts.length > 0) {
     console.error(`\n${conflicts.length} mod conflict(s):`);
     for (const conflict of conflicts) console.error(`  ${conflict}`);
     throw new Error('mod conflicts; no pack written');
   }
-  return errors;
+  return merged('errors');
 };
 
 export const runPackPipeline = async <T>(

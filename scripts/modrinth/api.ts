@@ -54,9 +54,6 @@ export const parseModrinthDownload = (
   }
 };
 
-export const parseProjectId = (url: string | undefined): null | string =>
-  parseModrinthDownload(url)?.projectId ?? null;
-
 const side = (value: Json | undefined): Env['client'] =>
   value === 'optional' || value === 'required' || value === 'unsupported'
     ? value
@@ -77,11 +74,9 @@ const parseEach = <I, T>(
 
 const parseProject = (body: Json): ModrinthProject | null => {
   if (!isJsonObject(body) || typeof body['id'] !== 'string') return null;
-  return {
-    client_side: side(body['client_side']),
-    id: body['id'],
-    server_side: side(body['server_side']),
-  };
+  const loaders = body['loaders'] ?? null;
+  if (!isStringArray(loaders)) return null;
+  return { id: body['id'], loaders };
 };
 
 const parseVersionFile = (body: Json): null | VersionFile => {
@@ -309,28 +304,28 @@ const fetchModrinthJson = async <T>(
   return parsed;
 };
 
-const fetchVersions = async (
+// Null (404) must reach the resolver: a gone project is not the same as a
+// project with no builds, and only the caller can tell them apart.
+const fetchVersions = (
   query: VersionQuery,
-): Promise<ModrinthVersion[]> => {
+): Promise<ModrinthVersion[] | null> => {
   const params = new URLSearchParams({
     game_versions: JSON.stringify([query.game]),
   });
   if (query.loaders.length > 0) {
     params.set('loaders', JSON.stringify(query.loaders));
   }
-  return (
-    (await fetchModrinthJson(
-      `https://api.modrinth.com/v2/project/${query.projectId}/version?${params.toString()}`,
-      parseVersionList,
-      'version',
-    )) ?? []
+  return fetchModrinthJson(
+    `https://api.modrinth.com/v2/project/${query.projectId}/version?${params.toString()}`,
+    parseVersionList,
+    'version',
   );
 };
 
 /**
  * Maps each sha1 Modrinth knows to its version; unknown hashes are absent.
- * Hash lookups are immutable, so hits are cached permanently per hash and only
- * hashes Modrinth has not answered yet are requested; misses stay uncached.
+ * Hits are immutable and cached permanently; misses are cached separately
+ * with the mutable TTL, since a new upload can make a hash known later.
  */
 const fetchVersionsByHash = async (
   cacheDir: string,
@@ -343,8 +338,15 @@ const fetchVersionsByHash = async (
       join(cacheDir, `hash-${hash}.json`),
       null,
     );
-    if (hit === undefined) missing.push(hash);
-    else versions.set(hash, hit);
+    if (hit !== undefined) {
+      versions.set(hash, hit);
+      continue;
+    }
+    const miss = await readCacheEntry<null>(
+      join(cacheDir, `hash-${hash}.miss.json`),
+      MUTABLE_TTL_MS,
+    );
+    if (miss === undefined) missing.push(hash);
   }
   if (missing.length === 0) return versions;
 
@@ -363,10 +365,19 @@ const fetchVersionsByHash = async (
     return version === null ? null : ([hash, version] as const);
   });
   if (entries === null) throw new Error(invalidPayload);
+  const answered = new Set<string>();
   for (const [hash, version] of entries) {
     versions.set(hash, version);
+    answered.add(hash);
     await writeCacheEntry(join(cacheDir, `hash-${hash}.json`), version);
   }
+  await Promise.all(
+    missing
+      .filter(hash => !answered.has(hash))
+      .map(hash =>
+        writeCacheEntry(join(cacheDir, `hash-${hash}.miss.json`), null),
+      ),
+  );
   return versions;
 };
 
@@ -399,7 +410,7 @@ export const createModrinthClient = (cacheDir: string): ModrinthClient => ({
   fetchVersionsByHash: hashes => fetchVersionsByHash(cacheDir, hashes),
   getProject: memoizeWithResponseLog(
     cacheDir,
-    (id: string) => `${id}.json`,
+    (id: string) => `project-${id}.json`,
     (projectId: string) =>
       fetchModrinthJson(
         `https://api.modrinth.com/v2/project/${projectId}`,

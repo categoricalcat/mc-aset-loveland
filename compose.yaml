@@ -21,8 +21,7 @@ x-pack-server: &pack-server
   environment:
     MEMORY_ALLOCATION: ${MEMORY_ALLOCATION:-8G}
   healthcheck:
-    test:
-      ['CMD', 'mc-monitor', 'status', '-host', '127.0.0.1', '-port', '25564']
+    test: ['CMD', 'mc-monitor', 'status', '-host', '127.0.0.1', '-port', '25564']
     interval: 5s
     timeout: 5s
     retries: 10
@@ -63,7 +62,7 @@ services:
     restart: unless-stopped
 
   server:
-    <<: *pack-server
+    !!merge <<: *pack-server
     profiles:
       - server
     cpu_shares: 4096
@@ -79,7 +78,7 @@ services:
       - ./.packs/server:/opt/pack:ro
 
   backup:
-    <<: *backup-worker
+    !!merge <<: *backup-worker
     environment:
       - OPERATION=write
       - BACKUP_VOLUME=${BACKUP_VOLUME:-asetland}
@@ -94,7 +93,7 @@ services:
       - ./scripts/backup.sh:/script/backup.sh:ro
 
   restore:
-    <<: *backup-worker
+    !!merge <<: *backup-worker
     environment:
       - OPERATION=read
       - BACKUP_VOLUME=${BACKUP_VOLUME:-asetland}
@@ -110,7 +109,7 @@ services:
       - ./scripts/backup.sh:/script/backup.sh:ro
 
   restic:
-    <<: *backup-worker
+    !!merge <<: *backup-worker
     profiles:
       - restic
     env_file:
@@ -126,7 +125,7 @@ services:
       - ./scripts/backup.sh:/script/backup.sh:ro
 
   serverpack:
-    <<: *pack-server
+    !!merge <<: *pack-server
     profiles:
       - serverpack
     container_name: asetland-serverpack
@@ -141,7 +140,7 @@ services:
       - ./.packs/serverpack:/opt/pack:ro
 
   bias:
-    <<: *pack-server
+    !!merge <<: *pack-server
     # no published ports: public access via playit tunnel only (tunnel->bias over mc-network)
     # 8G heap + ~2G JVM overhead; 12G swapped on this 19GB host
     mem_limit: 10g

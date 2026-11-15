@@ -1,7 +1,4 @@
 {
-  "dependencies": {
-    "adm-zip": "^0.6.1"
-  },
   "description": "Scripts for processing Minecraft modpacks",
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -9,7 +6,7 @@
     "@types/node": "^26.6.6",
     "eslint": "^10.15.0",
     "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-perfectionist": "^5.13.0",
+    "eslint-plugin-perfectionist": "^5.14.0",
     "eslint-plugin-prettier": "^5.5.7",
     "globals": "^17.14.0",
     "jiti": "^2.7.0",
@@ -20,6 +17,7 @@
   },
   "name": "mc-aset-loveland-scripts",
   "scripts": {
+    "check": "pnpm typecheck && pnpm lint && pnpm test",
     "pack": "tsx scripts/cli/index.ts",
     "process": "tsx scripts/cli/index.ts process",
     "update": "tsx scripts/cli/index.ts update",

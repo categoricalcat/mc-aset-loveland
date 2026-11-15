@@ -44,7 +44,7 @@ export const runUpdate = async ({
           minecraft: game,
         },
         extraErrors: issues,
-        files,
+        files: files.map(({ file }) => file),
         logs: [
           ...(unresolved.length > 0
             ? [`Removed (no ${game} ${loader} build): ${unresolved.join(', ')}`]
