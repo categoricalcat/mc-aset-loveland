@@ -109,15 +109,14 @@ world.
 
 ### bias (live)
 
-`pnpm run update <stem>` reads `<stem>.mrpack` (default `bias.mrpack`) and
-writes two packs from that resolution:
+`pnpm run update` turns a Prism `.mrpack` export into a server pack and a
+client pack for one Minecraft version (default 26.3). Each mod moves to its
+newest build for that version, required dependencies are added, and declared
+conflicts are checked before anything is written.
 
-- `<stem>-update-server.mrpack` — `install-pack` reads this and writes `.packs/bias`
-- `<stem>-update-client.mrpack` — import this in Prism. Same loader and the same
-  updated jars as the server pack, plus client-only mods, resource packs,
-  shader packs, and `overrides/mods`
+#### 1. Export from Prism
 
-Prism export, check:
+Check:
 
 - `mods` — index entries. Install each mod from Modrinth in Prism. Jars Prism
   cannot link land in `overrides/mods`. The client pack keeps that directory,
@@ -132,9 +131,56 @@ Leave `saves` unchecked. The world is volume `asetland`
 datapacks belong in that volume at `asetland/datapacks/`. To ship one inside
 the pack, place it at `overrides/asetland/datapacks/`.
 
+Save the export in the repository root as `bias.mrpack`, or as `<name>.mrpack`
+for another pack.
+
+#### 2. Run the update
+
 ```bash
 pnpm install
-pnpm run update # bias.mrpack -> bias-update-server.mrpack + bias-update-client.mrpack
+pnpm run update                 # bias.mrpack -> bias-update-server.mrpack + bias-update-client.mrpack
+pnpm run update other           # other.mrpack -> other-update-server.mrpack + other-update-client.mrpack
+pnpm run update --game 26.4     # update to another Minecraft version
+pnpm run update:preserve other  # keep mods that have no build for that version
+pnpm run update --help
+```
+
+Usage: `pnpm run update [--game <version>] [pack]`. `pnpm run update:preserve`
+takes the same arguments.
+
+- `pack` — default `bias`. A name (`other` reads `other.mrpack`) or a path
+  ending in `.mrpack`; outputs use the file name without `.mrpack`. pnpm runs
+  scripts from the repository root, so paths are relative to it and the
+  outputs land there.
+- `--game <version>` — default `26.3`. The Minecraft version to update to. The
+  loader is pinned to its latest build for that version.
+
+Put arguments straight after the script name, without `--`. pnpm passes a `--`
+on unchanged, so `pnpm run update -- --game 26.4` reads `--game` as the pack
+name and fails. `pnpm run pack` takes the subcommand explicitly:
+`pnpm run pack update --preserve --game 26.4 other`.
+
+A successful run writes:
+
+- `<name>-update-server.mrpack` — `install-pack` reads this and writes
+  `.packs/bias`
+- `<name>-update-client.mrpack` — import this in Prism. Same loader and the
+  same updated jars as the server pack, plus client-only mods, resource packs,
+  shader packs, and `overrides/mods`
+- `errors.log` — problems that did not stop the run (see below); deleted when
+  there are none
+
+`.backups/<name>/` holds the extracted pack and is wiped at the start of each
+run. Modrinth responses are cached on disk in `.backups/modrinth_cache/`:
+project metadata and version lists expire after 24 hours, while version and
+sha1 hash lookups never expire. Delete that directory to force a fully fresh
+run. Requests are throttled to 4 per second (80% of Modrinth's limit), so the
+first run against a cold cache takes a few minutes. A run also deletes a
+leftover `bias-updated.mrpack`.
+
+#### 3. Install on the server
+
+```bash
 nix run .#install-pack -- .packs/bias bias-update-server.mrpack
 docker compose up -d --force-recreate bias
 ```
@@ -154,35 +200,94 @@ nix run .#install-pack -- .packs/bias other-update-server.mrpack
 WORLD_VOLUME=mc-other docker compose up -d --force-recreate bias
 ```
 
-`pnpm run update` targets Minecraft 26.3. Both packs get:
+#### What the update changes
+
+Both packs get:
 
 - NeoForge when the index lists `neoforge`, otherwise Fabric, pinned to the
-  latest 26.3 loader build
-- Each mod replaced by its newest 26.3 release for that loader (any build
-  when no release exists); required Modrinth dependencies are added
+  latest loader build for the target version
+- Each mod replaced by its newest release for the target version and loader
+  (any build when no release exists); required Modrinth dependencies are
+  added, and an exact required version pin is selected instead of a newer
+  project release
 - client/server `env` rewritten from Modrinth
 
-Mods with no 26.3 build are dropped from both (`Removed` in the log). A
-resource pack or shader pack with no build for that loader stays at the
-exported file. The server pack then omits `server=unsupported` files.
-`overrides/mods` is only in the client pack. A run also deletes a leftover
-`bias-updated.mrpack`.
+Mods without a compatible build:
 
-Conflict check: before either pack is written, the run fails (exit 1, no
-zip) on any declared conflict:
+- `pnpm run update` drops a known Modrinth mod with no compatible build and
+  lists it under `Removed` in the log.
+- `pnpm run update:preserve` keeps that mod at its exported version, along
+  with the dependencies it needs. Exact pins stay at their pinned version
+  unless an updated mod also requires that project and the pin is
+  incompatible; unpinned dependencies prefer a compatible build before falling
+  back to an exported root version. If a preserved mod's exported version is
+  gone from Modrinth, the run fails rather than publish an unchecked
+  component.
+- Entries kept at an exported or pinned version are listed under `Preserved`
+  in the log. They still get their `env` from Modrinth and stay in
+  required-dependency checks and override deduplication.
+
+When exact pins conflict, a required dependency has no compatible build, or
+pins keep flipping each other's versions, either command searches compatible
+releases of the directly and transitively implicated roots. The search tries
+at most 128 root-version states, then names projects to replace or remove; it
+never guesses a pin.
+
+An unrecognised root file, or a resource pack or shader pack with no build for
+that loader, stays at the exported file. Exact pins such a pack declares on
+mod projects are ignored, so those mods still update. If Modrinth no longer
+has the pack's exported version, it is kept without dependency checks.
+
+The server pack omits `server=unsupported` files. `overrides/mods` is only in
+the client pack. Newly resolved entries and fetched preserved dependencies use
+Modrinth URLs and SHA-1/SHA-512 hashes; preserved root entries keep their
+exported paths, URLs, and hashes. The updater does not vendor mod JARs.
+
+#### Failures and errors.log
+
+A failed run exits 1 and leaves the previous output pair in place: both
+archives are staged and replace the old ones only after every check passes.
+Common messages:
+
+- `... Replace or remove: <projects>` — no combination of compatible releases
+  satisfies the pins and required dependencies. Replace or remove those
+  projects in Prism, export again, and rerun.
+- `mod conflicts; no pack written` — the conflict check below found a declared
+  conflict.
+- `no Fabric loader for <version>` or `no NeoForge build for <version>` — the
+  target version has no loader build yet.
+- `HTTP <status>` or `<n> Modrinth lookup error(s)` — a request to Modrinth or
+  to the loader metadata server failed. Rerun once it responds.
+- `cannot preserve <project>: ...` — `update:preserve` kept a mod whose exported
+  version is gone from Modrinth.
+
+Problems that do not stop the run go to `errors.log`: a required dependency
+with no Modrinth project or version id (an external file), and a resource or
+shader pack kept without metadata. Each successful run rewrites the file, or
+deletes it when there is nothing to report, and prints the count. A failed run
+leaves it untouched.
+
+Conflict check: before either pack is written, the run fails on any declared
+conflict:
 
 - a Modrinth `incompatible` dependency between two mods in the pack
   (whole project when `version_id` is null; that version when it is set)
+- a required Modrinth dependency is absent or resolves to a different exact
+  version
 - two `overrides/mods` jars from the same Modrinth project or with the same
   Fabric mod id
 - a Fabric `breaks` entry with range `*` naming another override jar
 
+A required dependency with no Modrinth id is not a conflict; it goes to
+`errors.log`.
+
 Override jars are matched to Modrinth by sha1. A match whose project is
 already in the index is removed. Unmatched jars fall back to the filename
-prefix. Pinned `required` versions, `embedded` projects also shipped as their
-own file, Fabric `conflicts` entries, and `breaks` entries with any other
-range (not evaluated) are printed as warnings. Undeclared mixin or class
-clashes are not detected.
+prefix. An `embedded` project also shipped as its own explicit file is retained
+and printed as an informational warning: third-party nested JARs are not
+rewritten, and the standalone copy can satisfy another dependency. Fabric
+`conflicts` entries and `breaks` entries with any other range (not evaluated)
+are warnings. Undeclared mixin or class clashes are not detected.
 
 ### server / serverpack
 
@@ -210,12 +315,18 @@ Server settings: `server.properties`
 
 ## Optional: Process Modpack
 
-Rewrites `.mrpack` client/server `env` flags from Modrinth project metadata.
-Versions stay as exported. `server=unsupported` files are omitted. bias is
-installed from `<stem>-update-server.mrpack`, not this output.
+Refreshes a `.mrpack` without updating any packages: client/server `env`
+flags are rewritten from Modrinth project metadata, override jars already in
+the index are removed, and the same conflict check as `update` runs before
+either pack is published. Versions and loader pins stay as exported — that is
+the only difference from `pnpm run update`. `server=unsupported` files are
+omitted from the server pack only, lookup errors abort before replacing the
+output archives, and non-fatal problems go to `errors.log`. bias is installed
+from `<stem>-update-server.mrpack`, not this output.
 
 ```bash
 pnpm install
-pnpm run process                 # bias.mrpack -> bias-processed.mrpack
-pnpm run process the-modpack     # the-modpack.mrpack -> the-modpack-processed.mrpack
+pnpm run process                 # bias.mrpack -> bias-process-client.mrpack + bias-process-server.mrpack
+pnpm run process the-modpack     # the-modpack.mrpack -> the-modpack-process-client.mrpack + the-modpack-process-server.mrpack
+pnpm run process --mods-only --write-index the-modpack
 ```

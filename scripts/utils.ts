@@ -3,13 +3,16 @@ import { createHash } from 'crypto';
 import fs from 'fs/promises';
 import { dirname, join } from 'path';
 
-import { type Json, parseJson } from './json.js';
+import { isJsonObject, type Json, parseJson } from './json.js';
 
 export const delay = (ms: number): Promise<void> =>
   new Promise(resolve => setTimeout(resolve, ms));
 
 export const readJson = async (path: string): Promise<Json> =>
   parseJson(await fs.readFile(path, 'utf8'));
+
+export const isMissing = (caught: unknown): boolean =>
+  caught instanceof Error && 'code' in caught && caught.code === 'ENOENT';
 
 // Capped so a bogus Retry-After cannot stall the run.
 export const retryAfterSeconds = (
@@ -26,34 +29,76 @@ export const retryAfterSeconds = (
   return Math.min(maxSeconds, Math.max(0, (until - Date.now()) / 1000));
 };
 
-export const withFileCache =
-  <Arg, Res>(
-    cacheDir: string,
-    cacheKey: (arg: Arg) => string,
-    fn: (arg: Arg) => Promise<null | Res>,
-    parse: (raw: Json) => null | Res,
-  ) =>
-  (arg: Arg): Promise<null | Res> => {
-    const filePath = join(cacheDir, cacheKey(arg));
-    return readJson(filePath)
-      .catch(() => null)
-      .then(cached => {
-        const parsed = cached === null ? null : parse(cached);
-        if (parsed !== null) {
-          console.log(`Using cached ${filePath}`);
-          return parsed;
-        }
+// ttlMs null means the entry never expires; anything unparseable is a miss.
+export const readCacheEntry = async <Res>(
+  filePath: string,
+  ttlMs: null | number,
+): Promise<Res | undefined> => {
+  let entry: Json;
+  try {
+    entry = parseJson(await fs.readFile(filePath, 'utf8'));
+  } catch {
+    return undefined;
+  }
+  if (
+    !isJsonObject(entry) ||
+    typeof entry['fetchedAt'] !== 'number' ||
+    !('value' in entry) ||
+    (ttlMs !== null && Date.now() - entry['fetchedAt'] >= ttlMs)
+  ) {
+    return undefined;
+  }
+  return entry['value'] as Res;
+};
+
+// A cache that cannot be written must not fail the lookup that produced it.
+export const writeCacheEntry = (
+  filePath: string,
+  value: unknown,
+): Promise<void> =>
+  fs
+    .mkdir(dirname(filePath), { recursive: true })
+    .then(() =>
+      fs.writeFile(
+        filePath,
+        JSON.stringify({ fetchedAt: Date.now(), value }),
+        'utf8',
+      ),
+    )
+    .catch((caught: unknown) => {
+      console.warn(`Unable to log ${filePath}: ${String(caught)}`);
+    });
+
+// Nulls (404s) are memoized for the run but never persisted to disk.
+export const memoizeWithResponseLog = <Arg, Res>(
+  logDir: string,
+  logName: (arg: Arg) => string,
+  fn: (arg: Arg) => Promise<null | Res>,
+  ttlMs: null | number,
+): ((arg: Arg) => Promise<null | Res>) => {
+  const memo = new Map<string, Promise<null | Res>>();
+  return (arg: Arg): Promise<null | Res> => {
+    const key = logName(arg);
+    const current = memo.get(key);
+    if (current !== undefined) return current;
+    const filePath = join(logDir, key);
+    const result = readCacheEntry<Res>(filePath, ttlMs)
+      .then(async hit => {
+        if (hit !== undefined) return hit;
         console.log(`Fetching ${filePath} from API`);
-        return fn(arg).then(res =>
-          res === null
-            ? res
-            : fs
-                .mkdir(dirname(filePath), { recursive: true })
-                .then(() => fs.writeFile(filePath, JSON.stringify(res), 'utf8'))
-                .then(() => res),
-        );
+        const res = await fn(arg);
+        if (res === null) return null;
+        await writeCacheEntry(filePath, res);
+        return res;
+      })
+      .catch((caught: unknown) => {
+        memo.delete(key);
+        throw caught;
       });
+    memo.set(key, result);
+    return result;
   };
+};
 
 export const extractZip = async (
   zipPath: string,

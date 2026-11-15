@@ -7,7 +7,7 @@
     "@eslint/js": "^10.0.1",
     "@tsconfig/strictest": "^2.0.9",
     "@types/node": "^26.6.6",
-    "eslint": "^10.14.0",
+    "eslint": "^10.15.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-perfectionist": "^5.13.0",
     "eslint-plugin-prettier": "^5.5.7",
@@ -20,13 +20,14 @@
   },
   "name": "mc-aset-loveland-scripts",
   "scripts": {
-    "dev": "tsx watch scripts/index.ts",
-    "process": "tsx scripts/index.ts",
-    "update": "tsx scripts/update.ts",
+    "pack": "tsx scripts/cli/index.ts",
+    "process": "tsx scripts/cli/index.ts process",
+    "update": "tsx scripts/cli/index.ts update",
+    "update:preserve": "tsx scripts/cli/index.ts update --preserve",
+    "test": "tsx --test scripts/*.test.ts scripts/cli/*.test.ts scripts/modrinth/*.test.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format": "eslint --fix ."
   },
   "type": "module",
   "version": "1.0.0",

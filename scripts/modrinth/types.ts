@@ -4,10 +4,15 @@ export interface Dependencies {
   neoforge?: string;
 }
 
+export type DependencyType =
+  'embedded' | 'incompatible' | 'optional' | 'required';
+
 export interface Env {
   client: 'optional' | 'required' | 'unsupported';
   server: 'optional' | 'required' | 'unsupported';
 }
+
+export type EnvTarget = Pick<ResolvedPackFile, 'file' | 'projectId'>;
 
 export interface File {
   downloads: string[];
@@ -50,6 +55,12 @@ export interface ModrinthVersion {
   version_type: string;
 }
 
+export interface ResolvedPackFile {
+  file: File;
+  preserve: boolean;
+  projectId: null | string;
+}
+
 export interface ResolvedVersion extends Pick<
   ModrinthVersion,
   'dependencies' | 'id' | 'project_id'
@@ -58,7 +69,7 @@ export interface ResolvedVersion extends Pick<
 }
 
 export interface VersionDependency {
-  dependency_type: string;
+  dependency_type: DependencyType;
   project_id: null | string;
   version_id: null | string;
 }
@@ -69,4 +80,17 @@ export interface VersionFile {
   primary: boolean;
   size: number;
   url: string;
+}
+
+export interface VersionQuery {
+  game: string;
+  loaders: readonly string[];
+  projectId: string;
+}
+
+export interface VersionSource {
+  fetchProjectVersions: (
+    query: VersionQuery,
+  ) => Promise<null | readonly ModrinthVersion[]>;
+  fetchVersionById: (versionId: string) => Promise<ModrinthVersion | null>;
 }

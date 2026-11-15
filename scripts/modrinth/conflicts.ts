@@ -24,15 +24,9 @@ const conflictRules: Rules = {
       : null,
 };
 
-// Pins are usually the version current at upload, and loaders dedupe
-// jar-in-jar copies, so these do not block the update.
 const warningRules: Rules = {
   embedded: (mod, _dep, target) =>
     `${mod.path} embeds ${target.path}, also shipped as its own file`,
-  required: (mod, dep, target) =>
-    dep.version_id !== null && dep.version_id !== target.id
-      ? `${mod.path} pins version ${dep.version_id} of ${target.path}`
-      : null,
 };
 
 const versionRange = (value: Json | undefined): string =>
@@ -41,6 +35,15 @@ const versionRange = (value: Json | undefined): string =>
     : Array.isArray(value)
       ? value.filter(item => typeof item === 'string').join(' || ')
       : '*';
+
+const dependencyTargets = (
+  dep: VersionDependency,
+  byProject: ReadonlyMap<string, ResolvedVersion[]>,
+  byVersion: ReadonlyMap<null | string, ResolvedVersion[]>,
+): readonly ResolvedVersion[] =>
+  (dep.project_id === null
+    ? byVersion.get(dep.version_id)
+    : byProject.get(dep.project_id)) ?? [];
 
 const modIdMap = (value: Json | undefined): Record<string, string> =>
   value !== undefined && isJsonObject(value)
@@ -62,23 +65,48 @@ export const parseFabricMod = (body: Json, file: string): FabricMod | null =>
 const graphMessages = (
   mods: readonly ResolvedVersion[],
   byProject: ReadonlyMap<string, ResolvedVersion[]>,
+  byVersion: ReadonlyMap<null | string, ResolvedVersion[]>,
   rules: Rules,
 ): string[] => {
-  const byVersion = Map.groupBy<null | string, ResolvedVersion>(
-    mods,
-    mod => mod.id,
-  );
   return mods.flatMap(mod =>
     mod.dependencies.flatMap(dep => {
       const rule = rules[dep.dependency_type];
       if (rule === undefined) return [];
-      const targets =
-        dep.project_id === null
-          ? byVersion.get(dep.version_id)
-          : byProject.get(dep.project_id);
-      return (targets ?? [])
+      return dependencyTargets(dep, byProject, byVersion)
         .filter(target => target !== mod)
         .flatMap(target => rule(mod, dep, target) ?? []);
+    }),
+  );
+};
+
+const isUnidentified = (dep: VersionDependency): boolean =>
+  dep.dependency_type === 'required' &&
+  dep.project_id === null &&
+  dep.version_id === null;
+
+const requiredMessages = (
+  mods: readonly ResolvedVersion[],
+  byProject: ReadonlyMap<string, ResolvedVersion[]>,
+  byVersion: ReadonlyMap<null | string, ResolvedVersion[]>,
+): string[] => {
+  return mods.flatMap(mod =>
+    mod.dependencies.flatMap(dep => {
+      if (dep.dependency_type !== 'required' || isUnidentified(dep)) return [];
+      const targets = dependencyTargets(dep, byProject, byVersion);
+      if (targets.length === 0) {
+        return [
+          `${mod.path} requires ${dep.project_id ?? `version ${dep.version_id}`}, but it is missing`,
+        ];
+      }
+      if (
+        dep.version_id !== null &&
+        !targets.some(target => target.id === dep.version_id)
+      ) {
+        return [
+          `${mod.path} requires version ${dep.version_id} of ${dep.project_id ?? 'an external project'}`,
+        ];
+      }
+      return [];
     }),
   );
 };
@@ -118,18 +146,30 @@ const declared = (
 export const checkConflicts = (
   mods: readonly ResolvedVersion[],
   jars: readonly FabricMod[],
-): { conflicts: string[]; warnings: string[] } => {
+): { conflicts: string[]; errors: string[]; warnings: string[] } => {
   const byProject = Map.groupBy(mods, mod => mod.project_id);
+  const byVersion = Map.groupBy<null | string, ResolvedVersion>(
+    mods,
+    mod => mod.id,
+  );
   const byId = Map.groupBy(jars, jar => jar.id);
   return {
     conflicts: [
-      ...graphMessages(mods, byProject, conflictRules),
+      ...graphMessages(mods, byProject, byVersion, conflictRules),
+      ...requiredMessages(mods, byProject, byVersion),
       ...duplicates('Modrinth project', byProject, mod => mod.path),
       ...duplicates('mod id', byId, jar => jar.file),
       ...declared(jars, byId, 'breaks', anyVersion),
     ],
+    errors: mods.flatMap(mod =>
+      mod.dependencies.some(isUnidentified)
+        ? [
+            `${mod.path} requires a dependency with no Modrinth project or version id; not checked`,
+          ]
+        : [],
+    ),
     warnings: [
-      ...graphMessages(mods, byProject, warningRules),
+      ...graphMessages(mods, byProject, byVersion, warningRules),
       ...declared(jars, byId, 'breaks', range => !anyVersion(range)),
       ...declared(jars, byId, 'conflicts', () => true),
     ],

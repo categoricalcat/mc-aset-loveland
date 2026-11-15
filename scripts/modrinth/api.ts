@@ -2,27 +2,60 @@ import { join } from 'path';
 
 import type {
   Dependencies,
+  DependencyType,
   Env,
   File,
   ModrinthIndex,
   ModrinthProject,
   ModrinthVersion,
-  ResolvedVersion,
   VersionDependency,
   VersionFile,
+  VersionQuery,
+  VersionSource,
 } from './types.js';
 
-import { config } from '../config.js';
 import { request } from '../http.js';
 import { isJsonObject, isStringArray, type Json, parseJson } from '../json.js';
-import { delay, retryAfterSeconds, withFileCache } from '../utils.js';
+import {
+  delay,
+  memoizeWithResponseLog,
+  readCacheEntry,
+  retryAfterSeconds,
+  writeCacheEntry,
+} from '../utils.js';
 
 // 300/min from X-Ratelimit-Limit. 80% is 240/min, one request every 250ms.
 const RATE_WINDOW_S = 60;
 const REQUEST_INTERVAL_MS = (RATE_WINDOW_S * 1000) / (300 * 0.8);
 
-export const parseProjectId = (url: string): null | string =>
-  url.split('/')[4] ?? null;
+// Project env metadata and version lists change over time; versions and
+// hashes do not, so only the mutable endpoints expire.
+const MUTABLE_TTL_MS = 24 * 60 * 60 * 1000;
+
+export const parseModrinthDownload = (
+  url: string | undefined,
+): null | { projectId: string; versionId: string } => {
+  if (url === undefined) return null;
+  try {
+    const parsed = new URL(url);
+    const [data, projectId, versions, versionId, filename] = parsed.pathname
+      .split('/')
+      .filter(Boolean);
+    return parsed.hostname === 'cdn.modrinth.com' &&
+      data === 'data' &&
+      versions === 'versions' &&
+      projectId !== undefined &&
+      versionId !== undefined &&
+      filename !== undefined
+      ? { projectId, versionId }
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+export const parseProjectId = (url: string | undefined): null | string =>
+  parseModrinthDownload(url)?.projectId ?? null;
 
 const side = (value: Json | undefined): Env['client'] =>
   value === 'optional' || value === 'required' || value === 'unsupported'
@@ -79,19 +112,35 @@ const parseVersionFile = (body: Json): null | VersionFile => {
   };
 };
 
-const parseVersionDependency = (body: Json): null | VersionDependency => {
+const dependencyTypes: Record<DependencyType, true> = {
+  embedded: true,
+  incompatible: true,
+  optional: true,
+  required: true,
+};
+
+const isDependencyType = (value: string): value is DependencyType =>
+  Object.hasOwn(dependencyTypes, value);
+
+// An unknown dependency type is dropped rather than invalidating its version.
+const parseVersionDependency = (body: Json): null | VersionDependency[] => {
   if (!isJsonObject(body) || typeof body['dependency_type'] !== 'string') {
     return null;
   }
+  const dependencyType = body['dependency_type'];
   const projectId = body['project_id'];
   const versionId = body['version_id'];
   if (typeof projectId !== 'string' && projectId !== null) return null;
   if (typeof versionId !== 'string' && versionId !== null) return null;
-  return {
-    dependency_type: body['dependency_type'],
-    project_id: projectId,
-    version_id: versionId,
-  };
+  return isDependencyType(dependencyType)
+    ? [
+        {
+          dependency_type: dependencyType,
+          project_id: projectId,
+          version_id: versionId,
+        },
+      ]
+    : [];
 };
 
 const parseVersion = (body: Json): ModrinthVersion | null => {
@@ -127,7 +176,7 @@ const parseVersion = (body: Json): ModrinthVersion | null => {
   if (parsedFiles === null || parsedDependencies === null) return null;
   return {
     date_published: datePublished,
-    dependencies: parsedDependencies,
+    dependencies: parsedDependencies.flat(),
     files: parsedFiles,
     game_versions: gameVersions,
     id,
@@ -246,25 +295,19 @@ const modrinthFetch = async (
   return res;
 };
 
-const fetchProject = async (
-  projectId: string,
-): Promise<ModrinthProject | null> => {
-  const res = await modrinthFetch(
-    `https://api.modrinth.com/v2/project/${projectId}`,
-  );
+const fetchModrinthJson = async <T>(
+  url: string,
+  parse: (body: Json) => null | T,
+  label: string,
+): Promise<null | T> => {
+  const res = await modrinthFetch(url);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-  const project = parseProject(parseJson(await res.text()));
-  if (project === null) throw new Error('invalid project payload');
-  return project;
+  const parsed = parse(parseJson(await res.text()));
+  if (parsed === null) throw new Error(`invalid ${label} payload`);
+  return parsed;
 };
-
-export interface VersionQuery {
-  game: string;
-  loaders: readonly string[];
-  projectId: string;
-}
 
 const fetchVersions = async (
   query: VersionQuery,
@@ -275,24 +318,38 @@ const fetchVersions = async (
   if (query.loaders.length > 0) {
     params.set('loaders', JSON.stringify(query.loaders));
   }
-  const res = await modrinthFetch(
-    `https://api.modrinth.com/v2/project/${query.projectId}/version?${params.toString()}`,
+  return (
+    (await fetchModrinthJson(
+      `https://api.modrinth.com/v2/project/${query.projectId}/version?${params.toString()}`,
+      parseVersionList,
+      'version',
+    )) ?? []
   );
-  if (res.status === 404) return [];
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-  const versions = parseVersionList(parseJson(await res.text()));
-  if (versions === null) throw new Error('invalid version payload');
-  return versions;
 };
 
-/** Maps each sha1 Modrinth knows to its version; unknown hashes are absent. */
-export const fetchVersionsByHash = async (
+/**
+ * Maps each sha1 Modrinth knows to its version; unknown hashes are absent.
+ * Hash lookups are immutable, so hits are cached permanently per hash and only
+ * hashes Modrinth has not answered yet are requested; misses stay uncached.
+ */
+const fetchVersionsByHash = async (
+  cacheDir: string,
   hashes: readonly string[],
 ): Promise<Map<string, ModrinthVersion>> => {
-  if (hashes.length === 0) return new Map();
+  const versions = new Map<string, ModrinthVersion>();
+  const missing: string[] = [];
+  for (const hash of new Set(hashes)) {
+    const hit = await readCacheEntry<ModrinthVersion>(
+      join(cacheDir, `hash-${hash}.json`),
+      null,
+    );
+    if (hit === undefined) missing.push(hash);
+    else versions.set(hash, hit);
+  }
+  if (missing.length === 0) return versions;
+
   const res = await modrinthFetch('https://api.modrinth.com/v2/version_files', {
-    body: JSON.stringify({ algorithm: 'sha1', hashes }),
+    body: JSON.stringify({ algorithm: 'sha1', hashes: missing }),
     headers: { 'content-type': 'application/json' },
     method: 'POST',
   });
@@ -306,134 +363,49 @@ export const fetchVersionsByHash = async (
     return version === null ? null : ([hash, version] as const);
   });
   if (entries === null) throw new Error(invalidPayload);
-  return new Map(entries);
+  for (const [hash, version] of entries) {
+    versions.set(hash, version);
+    await writeCacheEntry(join(cacheDir, `hash-${hash}.json`), version);
+  }
+  return versions;
 };
 
-const cacheDir = join(process.cwd(), config.cacheDir);
+export interface ModrinthClient extends VersionSource {
+  fetchVersionsByHash: (
+    hashes: readonly string[],
+  ) => Promise<Map<string, ModrinthVersion>>;
+  getProject: (projectId: string) => Promise<ModrinthProject | null>;
+}
 
-export const getProject = withFileCache(
-  cacheDir,
-  (id: string) => `${id}.json`,
-  fetchProject,
-  parseProject,
-);
-
-export const fetchProjectVersions = withFileCache(
-  cacheDir,
-  (query: VersionQuery) =>
-    `versions-${query.projectId}-${query.game}-${query.loaders.length > 0 ? query.loaders.join('+') : 'all'}.json`,
-  fetchVersions,
-  parseVersionList,
-);
-
-const newestRelease = (
-  versions: readonly ModrinthVersion[],
-): ModrinthVersion | undefined => {
-  const newest = [...versions].sort((a, b) =>
-    b.date_published.localeCompare(a.date_published),
-  );
-  return (
-    newest.find(version => version.version_type === 'release') ?? newest[0]
-  );
-};
-
-const indexFile = (
-  versionFile: VersionFile,
-  base: File | null,
-  dir: string,
-): File => ({
-  downloads: [versionFile.url],
-  env: base?.env ?? { client: 'required', server: 'required' },
-  fileSize: versionFile.size,
-  hashes: versionFile.hashes,
-  path: `${dir}${versionFile.filename}`,
+export const createModrinthClient = (cacheDir: string): ModrinthClient => ({
+  fetchProjectVersions: memoizeWithResponseLog(
+    cacheDir,
+    (query: VersionQuery) =>
+      `versions-${query.projectId}-${query.game}-${query.loaders.length > 0 ? query.loaders.join('+') : 'all'}.json`,
+    fetchVersions,
+    MUTABLE_TTL_MS,
+  ),
+  fetchVersionById: memoizeWithResponseLog(
+    cacheDir,
+    (id: string) => `version-${id}.json`,
+    (versionId: string) =>
+      fetchModrinthJson(
+        `https://api.modrinth.com/v2/version/${versionId}`,
+        parseVersion,
+        'version',
+      ),
+    null,
+  ),
+  fetchVersionsByHash: hashes => fetchVersionsByHash(cacheDir, hashes),
+  getProject: memoizeWithResponseLog(
+    cacheDir,
+    (id: string) => `${id}.json`,
+    (projectId: string) =>
+      fetchModrinthJson(
+        `https://api.modrinth.com/v2/project/${projectId}`,
+        parseProject,
+        'project',
+      ),
+    MUTABLE_TTL_MS,
+  ),
 });
-
-const resolveProject = async (
-  projectId: string,
-  game: string,
-  loader: string,
-  base: File | null,
-): Promise<null | { file: File; version: ModrinthVersion }> => {
-  const versions =
-    (await fetchProjectVersions({
-      game,
-      loaders: [loader],
-      projectId,
-    })) ?? [];
-  const version = newestRelease(versions);
-  const versionFile =
-    version?.files.find(file => file.primary) ?? version?.files[0];
-  if (!version || !versionFile) return null;
-  const dir =
-    base === null
-      ? 'mods/'
-      : base.path.slice(0, base.path.lastIndexOf('/') + 1);
-  return { file: indexFile(versionFile, base, dir), version };
-};
-
-/**
- * Replaces each index file with its latest build and appends required deps.
- * Callers stay sequential: version fetches share one in-flight request.
- */
-export const resolvePackFiles = async (
-  files: readonly File[],
-  game: string,
-  loader: string,
-): Promise<{
-  files: File[];
-  resolved: Map<string, ResolvedVersion>;
-  unresolved: string[];
-}> => {
-  const chosen: File[] = [];
-  const resolved = new Map<string, ResolvedVersion>();
-  const unresolved: string[] = [];
-  const seen = new Set<string>();
-  const pending: { base: File | null; projectId: string }[] = [];
-
-  for (const file of files) {
-    const projectId = file.downloads[0]
-      ? parseProjectId(file.downloads[0])
-      : null;
-    if (projectId === null) {
-      unresolved.push(file.path);
-      continue;
-    }
-    seen.add(projectId);
-    pending.push({ base: file, projectId });
-  }
-
-  for (const item of pending) {
-    const result = await resolveProject(
-      item.projectId,
-      game,
-      loader,
-      item.base,
-    );
-    if (result === null) {
-      // Resource packs and shader packs are not loader mods. A miss there
-      // keeps the exported file; a mod with no 26.3 build is dropped.
-      if (item.base !== null && !item.base.path.startsWith('mods/')) {
-        chosen.push(item.base);
-        continue;
-      }
-      unresolved.push(item.base?.path ?? item.projectId);
-      continue;
-    }
-    chosen.push(result.file);
-    resolved.set(item.projectId, { ...result.version, path: result.file.path });
-    for (const dep of result.version.dependencies) {
-      if (
-        dep.dependency_type !== 'required' ||
-        dep.project_id === null ||
-        seen.has(dep.project_id)
-      ) {
-        continue;
-      }
-      seen.add(dep.project_id);
-      pending.push({ base: null, projectId: dep.project_id });
-    }
-  }
-
-  return { files: chosen, resolved, unresolved };
-};

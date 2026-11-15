@@ -1,23 +1,32 @@
-import type { File } from './types.js';
-
-import { config } from '../config.js';
-import { getProject, parseProjectId } from './api.js';
+import type { Env, EnvTarget, File, ModrinthProject } from './types.js';
 
 type ProcessedFile =
   | { file: File; project: 'error'; projectId: string; status: string }
   | { file: File; project: 'found' | 'no-id' | 'not-found' | 'skipped' };
 
+type ProjectLookup = (projectId: string) => Promise<ModrinthProject | null>;
+
+const keptReasons: Record<
+  Exclude<ProcessedFile['project'], 'found'>,
+  (server: Env['server']) => string
+> = {
+  error: server => `lookup failed, server=${server}`,
+  'no-id': () => 'no project id in download URL',
+  'not-found': server => `Modrinth project not found, server=${server}`,
+  skipped: () => 'outside mods/, lookup skipped',
+};
+
 /**
  * A failed or empty lookup leaves the file unchanged so the caller can keep it.
  */
-const processFile = async (file: File): Promise<ProcessedFile> => {
-  if (config.modsOnly && !file.path.startsWith('mods/')) {
+const processFile = async (
+  { file, projectId }: EnvTarget,
+  getProject: ProjectLookup,
+  modsOnly: boolean,
+): Promise<ProcessedFile> => {
+  if (modsOnly && !file.path.startsWith('mods/')) {
     return { file, project: 'skipped' };
   }
-
-  const projectId = file.downloads[0]
-    ? parseProjectId(file.downloads[0])
-    : null;
 
   console.log(
     `Processing ${file.path} with project id ${projectId ?? 'missing'}`,
@@ -45,13 +54,16 @@ const processFile = async (file: File): Promise<ProcessedFile> => {
 };
 
 export const processAndLogFile = async (
-  file: File,
+  target: EnvTarget,
   index: number,
   total: number,
+  getProject: ProjectLookup,
+  modsOnly: boolean,
 ): Promise<{ error: boolean; file: File }> => {
+  const { file } = target;
   console.log(`Processing ${index + 1}/${total}: ${file.path}`);
 
-  const processed = await processFile(file);
+  const processed = await processFile(target, getProject, modsOnly);
   const error = processed.project === 'error';
 
   if (processed.project === 'error') {
@@ -65,19 +77,10 @@ export const processAndLogFile = async (
     console.log(
       `  Client-only ${file.path}: client=${client}, server=${server}`,
     );
-    return { error, file: processed.file };
-  }
-
-  if (processed.project === 'error') {
-    console.log(`  Kept ${file.path}: lookup failed, server=${server}`);
-  } else if (processed.project === 'skipped') {
-    console.log(`  Kept ${file.path}: outside mods/, lookup skipped`);
-  } else if (processed.project === 'not-found') {
+  } else if (processed.project !== 'found') {
     console.log(
-      `  Kept ${file.path}: Modrinth project not found, server=${server}`,
+      `  Kept ${file.path}: ${keptReasons[processed.project](server)}`,
     );
-  } else if (processed.project === 'no-id') {
-    console.log(`  Kept ${file.path}: no project id in download URL`);
   } else if (client !== file.env.client || server !== file.env.server) {
     console.log(
       `  Updated env for ${file.path}: client=${client}, server=${server}`,
@@ -88,13 +91,6 @@ export const processAndLogFile = async (
 
   return { error, file: processed.file };
 };
-
-export const keptFiles = (
-  processed: readonly { file: File | null }[],
-): File[] =>
-  processed
-    .map(({ file }) => file)
-    .filter((file): file is File => file !== null);
 
 export const serverFiles = (files: readonly File[]): File[] =>
   files.filter(file => file.env.server !== 'unsupported');
