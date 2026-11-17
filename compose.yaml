@@ -145,8 +145,10 @@ services:
     # 8G heap + ~2G JVM overhead; 12G swapped on this 19GB host
     mem_limit: 10g
     restart: unless-stopped
-    # World volume is already uid 1000, so no capabilities are needed.
+    # Rootless podman maps container uid 1000 to a synthetic host uid by
+    # default; keep-id maps it to host uid 1000, which owns the volume.
     user: '1000:1000'
+    userns_mode: keep-id
     volumes:
       - asetland:/data
       - ./eula.txt:/data/eula.txt:ro

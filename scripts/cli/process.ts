@@ -51,6 +51,25 @@ const exportedStep = async (
   resolved: await exportedResolvedVersions(index.files, fetchVersionById),
 });
 
+// Client-only instance junk; the server zip must not ship these.
+const CLIENT_ONLY_OVERRIDES = [
+  '.physics_mod_cache',
+  'command_history.txt',
+  'debug',
+  'downloads',
+  'options.txt',
+  'realms_persistence.json',
+  'resourcepacks',
+  'saves',
+  'servers.dat',
+  'servers.dat_old',
+  'SHADER_DUMP.txt',
+  'shaderpacks',
+  'usercache.json',
+  'xaero',
+  'XaeroWaypoints_BACKUP240807',
+];
+
 export const runProcess = async ({
   label = 'process',
   modrinth,
@@ -113,6 +132,14 @@ export const runProcess = async ({
       });
       await stageArchive(serverPackPath, serverUpdated, async () => {
         await fs.rm(overrideModsDir, { force: true, recursive: true });
+        await Promise.all(
+          CLIENT_ONLY_OVERRIDES.map(entry =>
+            fs.rm(path.join(paths.workDir, 'overrides', entry), {
+              force: true,
+              recursive: true,
+            }),
+          ),
+        );
       });
 
       return {
